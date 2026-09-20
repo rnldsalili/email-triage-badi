@@ -27,6 +27,11 @@ export interface MessageListRow {
   taxonomyVersion: string | null;
   rubricVersion: string | null;
   policyVersion: string | null;
+  fromAddress: string | null;
+  metadataErrorCode: string | null;
+  metadataFetchedAt: number | null;
+  metadataState: string;
+  subject: string | null;
 }
 
 export const listMessageRows = (
@@ -60,6 +65,11 @@ export const listMessageRows = (
       m.first_seen_at AS firstSeenAt,
       m.processing_status AS processingStatus,
       m.application_status AS applicationStatus,
+      m.from_address AS fromAddress,
+      m.metadata_error_code AS metadataErrorCode,
+      m.metadata_fetched_at AS metadataFetchedAt,
+      m.metadata_state AS metadataState,
+      m.subject AS subject,
       c.id AS classificationId,
       c.created_at AS classifiedAt,
       c.decision_json AS decisionJson,
@@ -102,6 +112,11 @@ export const getMessageDetailRow = (
       m.app_owned_label_ids_json AS appOwnedLabelIdsJson,
       m.dimension_locks_json AS dimensionLocksJson,
       m.last_observed_label_ids_json AS lastObservedLabelIdsJson,
+      m.from_address AS fromAddress,
+      m.metadata_error_code AS metadataErrorCode,
+      m.metadata_fetched_at AS metadataFetchedAt,
+      m.metadata_state AS metadataState,
+      m.subject AS subject,
       c.id AS classificationId,
       c.created_at AS classifiedAt,
       c.decision_json AS decisionJson,

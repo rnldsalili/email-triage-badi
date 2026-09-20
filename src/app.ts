@@ -7,10 +7,13 @@ import { ApiError, errorEnvelope } from "./http/errors";
 import { adminAuth } from "./http/middleware/auth";
 import { loadConfig } from "./http/middleware/config";
 import { requestId } from "./http/middleware/request-id";
+import { authRoutes } from "./routes/auth";
+import { configRoutes } from "./routes/config";
 import { healthRoutes } from "./routes/health";
 import { labelRoutes } from "./routes/labels";
 import { messageRoutes } from "./routes/messages";
 import { backfillRoutes, operationRoutes, syncRoutes } from "./routes/operations";
+import { runRoutes } from "./routes/run";
 import { settingsRoutes } from "./routes/settings";
 import { statusRoutes } from "./routes/status";
 
@@ -31,6 +34,9 @@ const handleError = (error: unknown, c: Context<AppEnv>): Response => {
   }
   console.error(
     JSON.stringify({
+      errorMessage:
+        error instanceof Error ? error.message.slice(0, 300) : "unknown_error",
+      errorName: error instanceof Error ? error.name : typeof error,
       event: "request_error",
       message: "unexpected_error",
       requestId: id,
@@ -55,7 +61,9 @@ export const createApp = (): Hono<AppEnv> => {
 
   const api = new Hono<AppEnv>();
   api.use("*", loadConfig);
+  api.route("/auth", authRoutes);
   api.use("*", adminAuth);
+  api.route("/config", configRoutes);
   api.route("/status", statusRoutes);
   api.route("/settings", settingsRoutes);
   api.route("/labels", labelRoutes);
@@ -63,6 +71,7 @@ export const createApp = (): Hono<AppEnv> => {
   api.route("/backfills", backfillRoutes);
   api.route("/operations", operationRoutes);
   api.route("/messages", messageRoutes);
+  api.route("/run", runRoutes);
   app.route("/api/v1", api);
 
   return app;

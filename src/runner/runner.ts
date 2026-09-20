@@ -48,7 +48,9 @@ export interface TickOutcome {
 export interface TickOverrides {
   client?: GmailClient;
   ai?: Ai;
+  leaseMs?: number;
   now?: () => number;
+  wallBudgetMs?: number;
 }
 
 type IdentityCheck =
@@ -101,6 +103,16 @@ const runSyncPhase = async (mailbox: Mailbox, deps: SyncDeps): Promise<SyncResul
   }
 };
 
+const failureReason = (error: unknown): string => {
+  if (error instanceof DeferredWorkError) {
+    return error.reason;
+  }
+  if (error instanceof GmailError) {
+    return error.reason;
+  }
+  return "runner_failed";
+};
+
 export const runScheduledTick = async (
   env: Env,
   overrides: TickOverrides = {}
@@ -108,6 +120,8 @@ export const runScheduledTick = async (
   const startedAt = Date.now();
   const config = parseConfig({ ...env });
   const db = createDb(env.DB);
+  const wallBudgetMs = overrides.wallBudgetMs ?? config.limits.tickWallBudgetMs;
+  const leaseMs = overrides.leaseMs ?? config.limits.runLeaseMs;
   const control = await getControl(db);
   if (control.mode === "paused") {
     return { durationMs: Date.now() - startedAt, mode: control.mode, status: "paused" };
@@ -120,13 +134,7 @@ export const runScheduledTick = async (
   });
   const leaseKey = `mailbox:${config.owner.accountEmail}`;
   const ownerToken = crypto.randomUUID();
-  const lease = await acquireLease(
-    db,
-    leaseKey,
-    ownerToken,
-    startedAt,
-    config.limits.runLeaseMs
-  );
+  const lease = await acquireLease(db, leaseKey, ownerToken, startedAt, leaseMs);
   if (!lease.acquired) {
     return {
       durationMs: Date.now() - startedAt,
@@ -137,11 +145,11 @@ export const runScheduledTick = async (
 
   const budget = new TimeBudget(
     startedAt,
-    config.limits.tickWallBudgetMs,
+    wallBudgetMs,
     config.limits.checkpointReserveMs
   );
   const now = overrides.now ?? (() => Date.now());
-  const fence = { leaseMs: config.limits.runLeaseMs, ownerToken, resourceKey: leaseKey };
+  const fence = { leaseMs, ownerToken, resourceKey: leaseKey };
   const guard = { budget, db, fence, now };
   const client =
     overrides.client ??
@@ -185,18 +193,12 @@ export const runScheduledTick = async (
       ...deps,
       budget: new TimeBudget(
         startedAt,
-        Math.min(config.limits.tickWallBudgetMs, 50_000),
+        Math.min(wallBudgetMs, 50_000),
         config.limits.checkpointReserveMs
       ),
     });
 
-    const stillOwned = await renewLease(
-      db,
-      leaseKey,
-      ownerToken,
-      now(),
-      config.limits.runLeaseMs
-    );
+    const stillOwned = await renewLease(db, leaseKey, ownerToken, now(), leaseMs);
     if (!stillOwned) {
       return {
         durationMs: Date.now() - startedAt,
@@ -246,8 +248,7 @@ export const runScheduledTick = async (
     };
   } catch (error) {
     const deferredReason = error instanceof DeferredWorkError ? error.reason : null;
-    const gmailReason = error instanceof GmailError ? error.reason : null;
-    const reason = deferredReason ?? gmailReason ?? "runner_failed";
+    const reason = failureReason(error);
     await db
       .update(syncRuns)
       .set({

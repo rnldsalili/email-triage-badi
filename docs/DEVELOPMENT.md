@@ -13,23 +13,27 @@ Implemented scripts; D1 integration tests are included in `test`:
 | Script | Contract |
 | --- | --- |
 | `bun run dev` | Local Wrangler development |
+| `bun run web:dev` | Vite dev server for the dashboard with `/api` proxied to Wrangler |
+| `bun run web:build` | Build the dashboard into `web/dist` for the Worker's static assets |
 | `bun run types` | Generate Cloudflare binding/runtime types |
-| `bun run typecheck` | TypeScript no-emit checking (worker/tests and scripts projects) |
-| `bun run lint` | Oxlint over `src`, `tests`, `scripts` |
+| `bun run typecheck` | TypeScript no-emit checking (worker/tests, scripts and dashboard projects) |
+| `bun run lint` | Oxlint over `src`, `tests`, `scripts`, `web` |
 | `bun run format` / `format:check` | Oxfmt formatting write/verify |
 | `bun run check` / `fix` | Ultracite check/fix over the whole repository (Oxlint + Oxfmt) |
-| `bun run test` | Vitest in the Workers runtime with local D1 and generated migrations |
+| `bun run test` | Workers-runtime API tests, then jsdom dashboard tests |
+| `bun run test:api` / `test:web` | Run only the API suite or only the dashboard suite |
 | `bun run test:watch` | Vitest watch mode |
 | `bun run test:live` | Explicit live tests (real AI binding, remote inference; excluded from routine runs) |
 | `bun run evaluate` | Live evaluation over the synthetic dataset with an explicit call cap |
-| `bun run build` | Wrangler deploy dry-run / bundle validation |
+| `bun run build` | Build the dashboard, then Wrangler deploy dry-run / bundle validation (assets included) |
+| `bun run build:worker` | Wrangler deploy dry-run without rebuilding the dashboard |
 | `bun run db:generate` | Generate SQL migrations and metadata from the Drizzle schema |
 | `bun run db:migrate:local` | Apply committed migrations to local D1 with Wrangler |
 | `bun run db:migrate:remote` | Apply committed migrations to the configured remote D1 |
 | `bun run oauth:bootstrap` | Local interactive Google OAuth setup using a Bun TypeScript helper |
 | `bun run oauth:check` | Verify the stored refresh token and Gmail profile |
 | `bun run labels:inventory` | Read-only Gmail label inventory and migration plan (no writes) |
-| `bun run deploy` | Deploy the configured Worker |
+| `bun run deploy` | Build the dashboard, then deploy the configured Worker |
 
 Notes from Phase 1 setup:
 
@@ -38,7 +42,9 @@ Notes from Phase 1 setup:
 - Tests run against local D1 with the committed Drizzle-generated migrations applied via `applyD1Migrations` in `tests/setup.ts`. Storage is isolated per test file, not per test, so tests use unique account and message identifiers.
 - Test bindings (including the admin token) are injected through `vitest.config.ts`; local development secrets live in the gitignored `.dev.vars`.
 - `wrangler types` reads `.dev.vars`, so the committed `worker-configuration.d.ts` includes local secret names. Regenerate it after changing bindings or `.dev.vars`.
-- Linting and formatting use Ultracite's Oxlint/Oxfmt presets (`oxlint.config.ts`, `oxfmt.config.ts`); the Oxfmt line width stays at 90 to match the existing code. `bun run check` runs both tools repo-wide, while `lint`/`format` scope to `src`, `tests` and `scripts`. Sequential I/O loops use `for await...of` or explicit recursion rather than `for`/`while` so `no-await-in-loop` stays satisfied without parallelising rate-limited Gmail and D1 work. Tests keep at most five direct assertions per `it`, grouping related expectations into a single structural matcher.
+- Linting and formatting use Ultracite's Oxlint/Oxfmt presets (`oxlint.config.ts`, `oxfmt.config.ts`); the Oxfmt line width stays at 90 to match the existing code. `bun run check` runs both tools repo-wide, while `lint`/`format` scope to `src`, `tests`, `scripts` and `web`. Sequential I/O loops use `for await...of` or explicit recursion rather than `for`/`while` so `no-await-in-loop` stays satisfied without parallelising rate-limited Gmail and D1 work. Tests keep at most five direct assertions per `it`, grouping related expectations into a single structural matcher. Dashboard files use kebab-case names; the Worker's `src` modules keep their existing naming.
+- The dashboard is a separate Vite project under `web/` with its own `web/tsconfig.json`. Its tests run in jsdom through `vitest.web.config.ts` and stub `fetch` with the helpers in `web/test/harness.ts`; the Workers pool config excludes `web/**` so the two environments do not mix.
+- The Workers test pool needs the assets directory from `wrangler.jsonc` to exist. `vitest.config.ts` writes a placeholder `web/dist/index.html` when the dashboard has not been built; run `bun run web:build` to test against the real bundle.
 
 Local D1 and fake Gmail/AI adapters should be the default for development. A live AI binding request may use remote inference and incur charges even when initiated from local development; make the evaluation path explicit.
 
@@ -87,7 +93,13 @@ Required scenarios:
 
 Use Hono's request testing support. Cover authenticated routes, invalid JSON/content types, bounded pagination, idempotency replay/conflict, correction semantics and 202 operation tracking. Ensure error responses contain no raw OAuth/provider payloads.
 
-Assert list requests make no Gmail calls. Test detail enrichment disabled, available, missing-message, auth failure and transient failure; stored classifications remain accessible and subject/sender values are never written to D1.
+Assert list requests make no Gmail calls. Test detail enrichment disabled, available, missing-message, auth failure and transient failure; stored classifications remain accessible. Stored Subject/From values are bounded header metadata, populated during classification or by an explicit metadata-refresh operation, and reused on later detail requests without another Gmail call.
+
+Cover the dashboard session flow: token exchange sets an HTTP-only cookie, bad tokens and forged/expired cookies are rejected, cookie-authenticated mutations require the same-origin header, sign-out requires it too, cookies are `Secure` outside loopback, and rotating the admin token invalidates existing sessions. Cover asset routing: dashboard paths return the SPA shell while `/api/v1/*` stays on the Worker.
+
+### Dashboard tests
+
+Run the React app in jsdom with a stubbed `fetch` and assert the workflows the owner performs: listing recognizable messages, keeping uncertain action values distinct from "No", submitting only the changed correction dimensions (including explicit topic removal), gating apply/retry on mode and job state, keeping a note-only correction disabled, resetting the form between messages, cursor paging, returning to the login form on a 401, surviving a malformed hash, sending the dashboard header, reusing an idempotency key when the same payload is retried, queuing a bounded backfill, and confirming a label migration with its plan operation ID.
 
 ### Live smoke tests
 

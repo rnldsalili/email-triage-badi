@@ -5,7 +5,7 @@
 ```mermaid
 flowchart TD
   Cron[Cloudflare Cron: every 5 minutes] --> Runner[Scheduled runner]
-  Owner[Owner / local admin client] --> API[Hono authenticated API]
+  Owner[Owner: dashboard or admin client] --> API[Hono authenticated API]
   API --> DB[(D1: controls, cursors, jobs, results)]
   Runner --> DB
   Runner --> Gmail[Gmail REST API]
@@ -15,9 +15,14 @@ flowchart TD
   Validate --> DB
   DB --> Apply[Label diff and mutation journal]
   Apply --> Gmail
+  Dashboard[React dashboard: Worker static assets] --> API
 ```
 
 One Worker exports `fetch: app.fetch` and a `scheduled` handler. Cron owns processing; HTTP mutations enqueue durable jobs and return promptly. API status/history requests query D1. There is no in-memory background queue and no reliance on module-global state for locks or durable progress.
+
+The dashboard is a React single-page app built to `web/dist` and served by the same Worker through static assets. Requests to `/api/v1/*` and `/healthz` run the Worker first; every other path is served from the assets directory with a single-page-application fallback so client-side routes resolve to `index.html`. Browser sessions use an HTTP-only cookie derived from `ADMIN_API_TOKEN`; the token itself is never stored in the browser (see API.md).
+
+`POST /run` optionally starts one bounded tick immediately (60-second wall budget, 90-second lease) so the owner does not wait for the next cron slot. The tick is awaited inside the request rather than detached with `waitUntil`, because `waitUntil` work is cancelled 30 seconds after the response and a cancelled tick could leave the mailbox lease held. The mailbox lease still serializes it against cron and any other concurrent run. The two synchronous endpoints are this one and `POST /messages/:id/metadata`; every other mutation enqueues durable work.
 
 D1 is enough for a low-volume single mailbox. Cloudflare Queues can replace the job-dispatch mechanism later if backlog or latency requires it, while preserving the same job and idempotency contracts.
 
@@ -199,7 +204,7 @@ Wrangler owns applied-migration tracking. Do not mix its migration history with 
 | `ai_daily_usage` | Account + UTC date unique, reserved call count, updated time; conditional atomic increments |
 | `label_mappings` | Account + stable key unique, Gmail ID, current name, legacy alias IDs, migration state |
 | `label_migration_operations` | Operation ID, label ID, old/new names, status, timestamps |
-| `messages` | Account + Gmail ID unique, thread ID, received time, first-seen time, generation, latest result ID, dimension locks, app-owned label IDs, last observed label IDs |
+| `messages` | Account + Gmail ID unique, thread ID, received time, first-seen time, generation, latest result ID, dimension locks, app-owned label IDs, last observed label IDs, stored subject/sender and metadata state |
 | `jobs` | ID, operation ID when owner-requested, account/message ID, kind, generation, stage, attempts, next-attempt time, deferred reason, lease token/expiry, error code; partial unique initial-job index |
 | `classifications` | ID, message ID, model version, taxonomy/rubric/policy versions, normalized input hash, answer JSON, decision JSON, review flag, usage, duration, application status |
 | `label_mutations` | ID, job ID/generation, before/desired/add/remove IDs, status, timestamps |
@@ -218,9 +223,11 @@ WHERE kind = 'initial';
 
 Also enforce uniqueness of `(account_id, message_id, kind, generation)` for message jobs. Allocate a new generation atomically for each new message operation; retries reuse the same job/generation. Idempotency-key replay returns the original operation rather than allocating another generation. Retain initial-job identity when pruning details, or rely on the retained message marker to prevent recreating initial work. Mailbox-wide operations use their own operation IDs and do not invent a message ID.
 
-For request coalescing, enforce a partial unique operation index on `(account_id, kind)` where `status = 'queued' AND kind IN ('sync', 'label_inventory')`. Insertion conflicts return the queued operation ID. A running operation no longer occupies that queued slot, allowing at most one follow-up. Explicit idempotency keys can map to that same queued operation; preserve payload-hash conflict checks.
+For request coalescing, enforce a partial unique operation index on `(account_id, kind, coalesce_key)` where `coalesce_key IS NOT NULL AND status = 'queued'`. Coalescing keys are set for `sync`, `migration_plan` and `metadata_refresh`. Insertion conflicts return the queued operation ID. A running operation no longer occupies that queued slot, allowing at most one follow-up. Explicit idempotency keys can map to that same queued operation; preserve payload-hash conflict checks.
 
-Retain minimal message deduplication/ownership/lock records for the connected account. Purge completed detailed results, mutation history and run diagnostics after 90 days in batches of at most `CLEANUP_BATCH_SIZE` (initially 100); retain pending intents, active jobs, and correction values needed to enforce locks. Do not persist bodies, attachments, subjects or senders. Message lists read only stored metadata. Detail requests with `includeGmailMetadata=true` may fetch Subject/From headers from Gmail in memory and return availability separately; see API.md. A failed Gmail enrichment must not hide a stored classification.
+Retain minimal message deduplication/ownership/lock records for the connected account. Purge completed detailed results, mutation history and run diagnostics after 90 days in batches of at most `CLEANUP_BATCH_SIZE` (initially 100); retain pending intents, active jobs, and correction values needed to enforce locks. Do not persist bodies or attachments.
+
+Store the bounded `Subject` and `From` header values (truncated, with a metadata state of `missing`, `available`, `unavailable` or `error`) so the dashboard can list recognizable messages without a Gmail call per row. Classification stores them from the full message it already fetches; `POST /messages/metadata-refresh` backfills older rows through a bounded, resumable maintenance operation that never re-runs inference. Environmental failures (rate limits, network, auth) leave rows `missing` and stop the batch so the account can recover; terminal failures persist `error` with a redacted code and are re-armed by an explicit owner request. Writes are ordered by `metadata_fetched_at`, so a slower concurrent fetch cannot overwrite a newer observation. Message lists read only stored metadata. Detail requests with `includeGmailMetadata=true` reuse stored values and fetch from Gmail only when metadata is missing; `POST /messages/:id/metadata` forces a refresh. See API.md. A failed Gmail enrichment must not hide a stored classification.
 
 ## 7. Module layout
 
@@ -228,26 +235,64 @@ Retain minimal message deduplication/ownership/lock records for the connected ac
 src/
   index.ts                  # fetch and scheduled exports
   app.ts                    # Hono routes and error boundary
-  config.ts                 # Zod-validated environment settings
-  auth/admin.ts             # Bearer auth
-  gmail/client.ts           # REST client and typed error mapping
-  gmail/oauth.ts            # Refresh-token exchange
-  gmail/sync.ts             # Bootstrap/history/recovery
-  gmail/normalize.ts        # MIME tree and body normalization
-  gmail/labels.ts           # Inventory, migration, mutation adapter
-  classification/jev.ts     # AI binding adapter
-  classification/schemas.ts # Provider and domain schemas
-  classification/rubric.ts  # Versioned questions and criteria
-  classification/policy.ts  # Threshold decisions
-  labels/taxonomy.ts        # Canonical keys/names/legacy mapping
-  labels/diff.ts            # Pure ownership-aware label diff
-  jobs/runner.ts            # Leases, bounded work, retry state
-  jobs/processor.ts         # Classify/apply/correct workflow
-  db/client.ts              # Drizzle D1 client factory
-  db/schema.ts              # Drizzle SQLite schema and inferred types
-  db/repositories/          # Typed Drizzle queries; isolated atomic SQL
-  routes/                  # Status, labels, messages, operations
-  observability.ts         # Redacted structured events
+  app-env.ts                # Hono bindings/variables types
+  scheduled.ts              # Cron entry point
+  config/
+    env.ts                  # Zod-validated environment settings
+    versions.ts             # Build, taxonomy, rubric and policy versions
+  http/
+    errors.ts               # Error codes and envelope
+    cursor.ts               # Opaque pagination cursors
+    idempotency.ts          # Replay records and operation writes
+    validation.ts           # Bounded JSON body validation
+    middleware/             # Request ID, config loading, admin/session auth
+  utils/                    # Crypto, session cookies, bounded bodies, time
+  gmail/
+    client.ts               # REST client and typed error mapping
+    tokens.ts               # Refresh-token exchange
+    errors.ts               # Reason mapping and retryability
+    types.ts                # Provider schemas
+  sync/
+    gmail-sync.ts           # Bootstrap, incremental history, recovery
+  email/
+    normalize.ts            # MIME tree and body normalization
+  classifier/
+    jev.ts                  # AI binding adapter
+    schemas.ts              # Provider and domain schemas
+    questions.ts            # Versioned questions
+    policy.ts               # Threshold decisions
+  taxonomy/
+    labels.ts               # Canonical keys, names, legacy mapping
+  services/
+    corrections.ts          # Correction merging
+    label-apply.ts          # Ownership-aware label application
+    label-diff.ts           # Pure label diff
+    label-migration.ts      # Journaled migration execution
+    labels.ts               # Inventory, plan and persistence
+    mailbox.ts              # Mailbox identity verification
+    message-metadata.ts     # Stored Subject/From state machine
+    run-now.ts              # Owner-triggered bounded tick
+    status.ts               # Aggregated status response
+  runner/
+    runner.ts               # Leases, bounded work, tick orchestration
+    process-jobs.ts         # Classify/apply/correct workflow
+    maintenance.ts          # Sync, label migration, metadata refresh
+    backfill.ts             # Bounded inbox scans
+    guard.ts                # Time and lease admission
+    time-budget.ts          # Stage cost estimates
+  db/
+    client.ts               # Drizzle D1 client factory
+    schema.ts               # Drizzle SQLite schema and inferred types
+    repositories/           # Typed Drizzle queries; isolated atomic SQL
+  routes/                   # Status, labels, messages, operations, auth, config, run
+web/
+  index.html                # Dashboard entry
+  public/_headers           # Security and cache headers for assets
+  src/app.tsx               # Session gate, hash routing, layout
+  src/api.ts                # Typed fetch client with CSRF header
+  src/hooks.ts              # Polling resources and mutation actions
+  src/components/           # Overview, messages, activity, labels views
+  test/                     # jsdom component and workflow tests
 migrations/                 # Generated SQL and Drizzle schema metadata
 drizzle.config.ts           # SQLite dialect, schema and migration output
 scripts/                    # Bun-run local TypeScript OAuth/evaluation helpers

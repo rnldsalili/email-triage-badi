@@ -13,6 +13,7 @@ import { getControl } from "../db/repositories/control";
 import { mailboxes } from "../db/schema";
 import { LABEL_KEYS } from "../taxonomy/labels";
 import { nextUtcMidnight, utcDateString } from "../utils/time";
+import { countMessageMetadata } from "./message-metadata";
 
 export interface StatusResponse {
   mode: string;
@@ -31,6 +32,10 @@ export interface StatusResponse {
   operations: {
     queued: number;
     failed: number;
+  };
+  messages: {
+    metadataErrors: number;
+    missingMetadata: number;
   };
   aiBudget: {
     used: number;
@@ -129,12 +134,15 @@ export const buildStatus = async (
 
   const [mailbox] = mailboxRows;
   const used = budgetUsage?.reservedCalls ?? 0;
-  const completion = await db.get<{ at: number | null }>(
-    sql`SELECT MAX(updated_at) AS at FROM jobs WHERE stage = 'completed'`
-  );
-  const error = await db.get<{ code: string; at: number }>(
-    sql`SELECT failure_summary AS code, finished_at AS at FROM sync_runs WHERE error_count > 0 AND failure_summary IS NOT NULL ORDER BY started_at DESC LIMIT 1`
-  );
+  const [metadataCounts, completion, error] = await Promise.all([
+    countMessageMetadata(db, config.owner.accountEmail),
+    db.get<{ at: number | null }>(
+      sql`SELECT MAX(updated_at) AS at FROM jobs WHERE stage = 'completed'`
+    ),
+    db.get<{ code: string; at: number }>(
+      sql`SELECT failure_summary AS code, finished_at AS at FROM sync_runs WHERE error_count > 0 AND failure_summary IS NOT NULL ORDER BY started_at DESC LIMIT 1`
+    ),
+  ]);
 
   return {
     aiBudget: {
@@ -157,6 +165,10 @@ export const buildStatus = async (
           syncPhase: mailbox.syncPhase,
         }
       : null,
+    messages: {
+      metadataErrors: metadataCounts.errors,
+      missingMetadata: metadataCounts.missing,
+    },
     mode: control.mode,
     operations: operationCounts,
     updatedAt: new Date(now).toISOString(),

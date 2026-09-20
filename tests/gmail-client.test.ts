@@ -159,7 +159,7 @@ describe("gmail client", () => {
     });
     await expect(quota.getProfile()).rejects.toMatchObject({
       reason: "quota_exceeded",
-      retryable: false,
+      retryable: true,
     });
   });
 

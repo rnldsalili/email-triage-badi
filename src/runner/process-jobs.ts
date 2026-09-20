@@ -21,6 +21,10 @@ import { normalizeMessage } from "../email/normalize";
 import type { GmailClient } from "../gmail/client";
 import { GmailError } from "../gmail/errors";
 import { applyClassifiedJob } from "../services/label-apply";
+import {
+  metadataFromMessage,
+  persistMessageMetadata,
+} from "../services/message-metadata";
 import { InputLimitError } from "../utils/bounded-body";
 import { nextUtcMidnight, utcDateString } from "../utils/time";
 import { admit, DeferredWorkError } from "./guard";
@@ -218,6 +222,12 @@ const classifyJob = async (
   if (!claimed) {
     return;
   }
+
+  await persistMessageMetadata(
+    deps.db,
+    message.id,
+    metadataFromMessage(full, deps.now())
+  );
 
   await admit(deps, STAGE_ESTIMATES_MS.classification);
   const normalized = await normalizeMessage(full, {

@@ -12,11 +12,12 @@ import { getControl } from "../db/repositories/control";
 import { getLatestJobForMessage } from "../db/repositories/jobs";
 import { getMessageDetailRow, listMessageRows } from "../db/repositories/message-queries";
 import { getMessageByGmailId } from "../db/repositories/messages";
+import { enqueueOperation } from "../db/repositories/operations";
 import { generationWrites } from "../db/repositories/owner-operations";
 import { corrections } from "../db/schema";
 import { GmailClient } from "../gmail/client";
-import { GmailError } from "../gmail/errors";
 import { createAccessTokenSource } from "../gmail/tokens";
+import { decodeCursor, encodeCursor } from "../http/cursor";
 import { ApiError } from "../http/errors";
 import {
   requireIdempotencyKey,
@@ -26,29 +27,12 @@ import {
 } from "../http/idempotency";
 import { readJsonBody } from "../http/validation";
 import { mergeCorrections } from "../services/corrections";
+import {
+  countMessageMetadata,
+  rearmFailedMetadata,
+  refreshMessageMetadata,
+} from "../services/message-metadata";
 import { TOPIC_KEYS } from "../taxonomy/labels";
-
-const encodeCursor = (firstSeenAt: number, id: string): string =>
-  btoa(`${firstSeenAt}:${id}`).replaceAll("+", "-").replaceAll("/", "_");
-
-const decodeCursor = (cursor: string): { firstSeenAt: number; id: string } => {
-  let decoded: string;
-  try {
-    decoded = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
-  } catch {
-    throw new ApiError("VALIDATION_ERROR", "Invalid cursor");
-  }
-  const separator = decoded.indexOf(":");
-  if (separator === -1) {
-    throw new ApiError("VALIDATION_ERROR", "Invalid cursor");
-  }
-  const firstSeenAt = Number(decoded.slice(0, separator));
-  const id = decoded.slice(separator + 1);
-  if (!Number.isFinite(firstSeenAt) || !id) {
-    throw new ApiError("VALIDATION_ERROR", "Invalid cursor");
-  }
-  return { firstSeenAt, id };
-};
 
 let clientFactory: (config: AppConfig) => GmailClient = (config) =>
   new GmailClient({
@@ -142,6 +126,7 @@ const correctionSchema = z
 
 const reprocessSchema = z.object({ reason: z.string().max(500).optional() }).strict();
 const applySchema = z.object({ classificationId: z.string().min(1) }).strict();
+const metadataRefreshSchema = z.object({ retryErrors: z.boolean().optional() }).strict();
 
 const requireMessage = async (
   db: ReturnType<typeof createDb>,
@@ -164,8 +149,9 @@ export const messageRoutes = new Hono<AppEnv>()
       throw new ApiError("VALIDATION_ERROR", "Invalid list query");
     }
 
+    const cursor = query.data.cursor ? decodeCursor(query.data.cursor) : null;
     const rows = await listMessageRows(db, accountId, {
-      cursor: query.data.cursor ? decodeCursor(query.data.cursor) : undefined,
+      cursor: cursor ? { firstSeenAt: cursor.sortKey, id: cursor.id } : undefined,
       limit: query.data.limit + 1,
       needsReview:
         query.data.needsReview === undefined
@@ -180,9 +166,12 @@ export const messageRoutes = new Hono<AppEnv>()
     return c.json({
       items: page.map((row) => ({
         applicationStatus: row.applicationStatus,
+        from: row.fromAddress,
         messageId: row.gmailMessageId,
+        metadataState: row.metadataState,
         processingStatus: row.processingStatus,
         receivedAt: new Date(row.receivedAt).toISOString(),
+        subject: row.subject,
         threadId: row.threadId,
         ...resultFields(row),
       })),
@@ -207,44 +196,26 @@ export const messageRoutes = new Hono<AppEnv>()
       .from(corrections)
       .where(eq(corrections.messageId, row.id))
       .orderBy(desc(corrections.revision));
+    const job = await getLatestJobForMessage(db, accountId, row.id);
 
     const includeGmailMetadata = c.req.query("includeGmailMetadata") === "true";
-    let gmailMetadata: Record<string, unknown> = {
-      errorCode: null,
-      fetchedAt: null,
-      from: null,
-      status: "not_requested",
-      subject: null,
-    };
-    if (includeGmailMetadata) {
-      try {
-        const message = await clientFactory(config).getMessage(
-          row.gmailMessageId,
-          "metadata",
-          ["Subject", "From"]
-        );
-        const headers = message.payload?.headers ?? [];
-        const subject =
-          headers.find((header) => header.name === "Subject")?.value ?? null;
-        const from = headers.find((header) => header.name === "From")?.value ?? null;
-        gmailMetadata = {
+    const gmailMetadata: Record<string, unknown> = includeGmailMetadata
+      ? {
+          errorCode: row.metadataErrorCode,
+          fetchedAt: row.metadataFetchedAt
+            ? new Date(row.metadataFetchedAt).toISOString()
+            : null,
+          from: row.fromAddress,
+          status: row.metadataState,
+          subject: row.subject,
+        }
+      : {
           errorCode: null,
-          fetchedAt: new Date().toISOString(),
-          from,
-          status: "available",
-          subject,
-        };
-      } catch (error) {
-        const reason = error instanceof GmailError ? error.reason : "error";
-        gmailMetadata = {
-          errorCode: reason,
-          fetchedAt: new Date().toISOString(),
+          fetchedAt: null,
           from: null,
-          status: reason === "not_found" ? "unavailable" : "error",
+          status: "not_requested",
           subject: null,
         };
-      }
-    }
 
     return c.json({
       answers,
@@ -257,8 +228,25 @@ export const messageRoutes = new Hono<AppEnv>()
         replacementValues: JSON.parse(correction.replacementValuesJson) as unknown,
         revision: correction.revision,
       })),
+      from: row.fromAddress,
       gmailMetadata,
+      job: job
+        ? {
+            attempts: job.attempts,
+            deferredReason: job.deferredReason,
+            errorCode: job.errorCode,
+            errorMessage: job.errorMessage,
+            id: job.id,
+            kind: job.kind,
+            nextAttemptAt: job.nextAttemptAt
+              ? new Date(job.nextAttemptAt).toISOString()
+              : null,
+            stage: job.stage,
+            updatedAt: new Date(job.updatedAt).toISOString(),
+          }
+        : null,
       messageId: row.gmailMessageId,
+      metadataState: row.metadataState,
       ownership: {
         appOwnedLabelIds: JSON.parse(row.appOwnedLabelIdsJson) as string[],
         dimensionStates: JSON.parse(row.dimensionLocksJson) as unknown,
@@ -266,8 +254,62 @@ export const messageRoutes = new Hono<AppEnv>()
       },
       processingStatus: row.processingStatus,
       receivedAt: new Date(row.receivedAt).toISOString(),
+      subject: row.subject,
       threadId: row.threadId,
       ...resultFields(row),
+    });
+  })
+  .post("/metadata-refresh", async (c) => {
+    const db = createDb(c.env.DB);
+    const accountId = c.get("config").owner.accountEmail;
+    const hasBody = (c.req.header("content-length") ?? "0") !== "0";
+    const body = hasBody ? await readJsonBody(c, metadataRefreshSchema) : {};
+    const now = Date.now();
+    if (body.retryErrors) {
+      await rearmFailedMetadata(db, accountId, 100);
+    }
+    const counts = await countMessageMetadata(db, accountId);
+    const outcome = await enqueueOperation(db, {
+      accountId,
+      coalesceKey: "metadata_refresh",
+      id: crypto.randomUUID(),
+      kind: "metadata_refresh",
+      now,
+      requestJson: JSON.stringify({ retryErrors: body.retryErrors ?? false }),
+    });
+    return c.json(
+      {
+        coalesced: !outcome.created,
+        errors: counts.errors,
+        operationId: outcome.operation.id,
+        pending: counts.missing,
+      },
+      202
+    );
+  })
+  .post("/:id/metadata", async (c) => {
+    const db = createDb(c.env.DB);
+    const config = c.get("config");
+    const accountId = config.owner.accountEmail;
+    const message = await requireMessage(db, accountId, c.req.param("id"));
+    const result = await refreshMessageMetadata(
+      db,
+      clientFactory(config),
+      message,
+      Date.now()
+    );
+    if (result.status === "retry_later") {
+      throw new ApiError(
+        "DEPENDENCY_UNAVAILABLE",
+        "Gmail is temporarily unavailable; retry shortly"
+      );
+    }
+    return c.json({
+      errorCode: result.metadata.errorCode,
+      fetchedAt: new Date(result.metadata.fetchedAt).toISOString(),
+      from: result.metadata.from,
+      status: result.metadata.state,
+      subject: result.metadata.subject,
     });
   })
   .post("/:id/reprocess", async (c) => {

@@ -24,6 +24,8 @@ jobs:
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
+      - name: Build dashboard assets
+        run: bun run web:build
       - run: bun run test
       - name: Check schema and generated migrations
         run: |

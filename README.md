@@ -2,7 +2,7 @@
 
 A personal Gmail triage service for Cloudflare Workers. It classifies incoming email with Jev through Cloudflare's AI binding and applies a topic label plus relevant action labels in Gmail.
 
-**Project status:** core pipeline and operational API implemented. The repository includes hardening for mode changes, lease fencing, migration recovery, atomic owner operations, bounded inputs, retention, evaluation reports and CI. The previously deployed Worker runs in dry-run mode with a five-minute cron; these repository updates require deployment. Phase 7 remains open: representative owner-labeled evaluation, the observation dry-run, operational drills and the controlled apply-mode trial.
+**Project status:** core pipeline, operational API and owner dashboard implemented. The repository includes hardening for mode changes, lease fencing, migration recovery, atomic owner operations, bounded inputs, retention, evaluation reports and CI. The previously deployed Worker runs in dry-run mode with a five-minute cron; these repository updates require deployment. Phase 7 remains open: representative owner-labeled evaluation, the observation dry-run, operational drills and the controlled apply-mode trial.
 
 Live verification performed 2026-09-20:
 
@@ -21,17 +21,18 @@ Make the existing Gmail inbox easier to scan by answering four questions for eac
 3. Does it need a reply?
 4. Does it require another action?
 
-Gmail remains the interface for reading email. The service provides a small authenticated API for setup, status, classification history, corrections, and retry operations.
+Gmail remains the interface for reading email. A private owner dashboard served by the same Worker shows classifications, corrections and operations, and covers the routine work: review messages, correct labels, retry or reprocess failures, apply saved results, scan older mail, manage label setup, switch modes and trigger a bounded run. The same capabilities remain available through the authenticated API for automation and recovery.
 
 ## Stack
 
 | Component | Choice |
 | --- | --- |
 | Runtime | Cloudflare Workers |
+| Dashboard | React + Vite, served as Worker static assets |
 | HTTP framework | Hono |
 | Language | TypeScript with strict checking |
 | Validation | Zod 4 with a small Hono JSON-body validation helper |
-| Classification | `env.AI.run("typesafe/jev", { state, questions })` |
+| Classification | `env.AI.run(AI_MODEL, { state, questions }, { gateway, skipCache, collectLog: false })` |
 | Gmail integration | Gmail REST API with OAuth 2.0 offline access |
 | Scheduling | Cloudflare Cron Triggers, initially every five minutes |
 | Persistence | Cloudflare D1 with Drizzle ORM (`drizzle-orm/d1`) |
@@ -61,9 +62,11 @@ Jev is listed by Cloudflare as a **third-party** model available through the nat
 - Discover new inbox messages using Gmail history.
 - Classify a message with one topic Choice and three independent action Noul questions in one Jev call.
 - Apply up to one automatic topic label and zero or more action labels.
+- Store bounded Subject/From metadata so messages are recognizable in the dashboard without a Gmail call per row.
 - Keep processing state, model results, and corrections in D1.
 - Start in dry-run mode, then enable label application after evaluation.
 - Recover from retries and interrupted processing without repeatedly classifying completed messages.
+- Serve an owner-only dashboard over the same authenticated API.
 
 The approved taxonomy contains **12 topic labels and 3 action labels**. See [Labels](docs/LABELS.md) for exact names and boundaries.
 
@@ -80,7 +83,7 @@ bun run test
 bun run build
 ```
 
-Routine tests use local D1 and fake providers with remote bindings disabled. For local development, copy `.dev.vars.example` to `.dev.vars`, configure the owner in `wrangler.jsonc`, supply credentials, and run `bun run db:migrate:local` followed by `bun run dev`. See [OPERATIONS.md](docs/OPERATIONS.md) for OAuth and deployment setup.
+Routine tests run local D1 and fake providers with remote bindings disabled, plus a jsdom suite for the dashboard. The dashboard is a React app in `web/`; `bun run web:build` bundles it into `web/dist`, which the Worker serves as static assets. `bun run build` builds the dashboard into `web/dist` and then validates the Worker bundle and assets with a Wrangler dry-run. For local development, copy `.dev.vars.example` to `.dev.vars`, configure the owner in `wrangler.jsonc`, supply credentials, and run `bun run db:migrate:local` followed by `bun run dev` (Worker + dashboard) or `bun run web:dev` for the dashboard against the running Worker. See [OPERATIONS.md](docs/OPERATIONS.md) for OAuth and deployment setup.
 
 Live evaluation is explicit and billed separately from the production daily cap:
 

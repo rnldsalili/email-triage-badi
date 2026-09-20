@@ -350,6 +350,41 @@ describe("job processing", () => {
     expect(gmail.calls.map((call) => call.method)).toStrictEqual(["getMessage"]);
   });
 
+  it("stores the subject and sender while classifying", async () => {
+    const db = createDb(env.DB);
+    const messageId = await seedJob(db);
+    const gmail = fakeGmail({
+      getMessage: (id) => fullMessage(id, "Body"),
+    });
+
+    await processDueJobs({
+      accountId: ACCOUNT,
+      ai: fakeAi(),
+      budget: new TimeBudget(NOW, 120_000, 15_000),
+      client: gmail.client,
+      config: testConfig(),
+      db,
+      mode: "dry_run",
+      now: () => NOW,
+    });
+
+    const stored = await db
+      .select({
+        fromAddress: messages.fromAddress,
+        metadataFetchedAt: messages.metadataFetchedAt,
+        metadataState: messages.metadataState,
+        subject: messages.subject,
+      })
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    expect(stored[0]).toStrictEqual({
+      fromAddress: "Sender <sender@example.test>",
+      metadataFetchedAt: NOW,
+      metadataState: "available",
+      subject: "Subject for gm-1",
+    });
+  });
+
   it("defers inference jobs at the daily cap without consuming retries", async () => {
     const db = createDb(env.DB);
     await seedJob(db);

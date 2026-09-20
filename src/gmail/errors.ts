@@ -11,6 +11,7 @@ export type GmailErrorReason =
   | "invalid_response";
 
 const RETRYABLE_REASONS: ReadonlySet<GmailErrorReason> = new Set([
+  "quota_exceeded",
   "rate_limited",
   "server_error",
   "network_error",

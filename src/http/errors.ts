@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 export type ErrorCode =
   | "VALIDATION_ERROR"
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
   | "PAYLOAD_TOO_LARGE"
@@ -15,6 +16,7 @@ const STATUS_BY_CODE: Record<ErrorCode, ContentfulStatusCode> = {
   CONFIGURATION_ERROR: 500,
   CONFLICT: 409,
   DEPENDENCY_UNAVAILABLE: 503,
+  FORBIDDEN: 403,
   INTERNAL_ERROR: 500,
   NOT_FOUND: 404,
   PAYLOAD_TOO_LARGE: 413,

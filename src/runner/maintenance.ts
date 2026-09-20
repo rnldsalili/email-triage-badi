@@ -9,6 +9,11 @@ import { jobs, operations } from "../db/schema";
 import { markOperation } from "../http/idempotency";
 import { executeLabelMigration } from "../services/label-migration";
 import { buildMigrationPlan, persistInventory } from "../services/labels";
+import {
+  countMessageMetadata,
+  listMessagesMissingMetadata,
+  refreshMessageMetadata,
+} from "../services/message-metadata";
 import { runBootstrap, runIncrementalSync, runRecovery } from "../sync/gmail-sync";
 import type { SyncDeps } from "../sync/gmail-sync";
 import { admit, DeferredWorkError } from "./guard";
@@ -32,7 +37,114 @@ export interface MaintenanceOutcome {
   deferred: number;
 }
 
-const MAINTENANCE_KINDS = ["sync", "migration_plan", "migrate"] as const;
+const MAINTENANCE_KINDS = [
+  "sync",
+  "migration_plan",
+  "migrate",
+  "metadata_refresh",
+] as const;
+
+const refreshPendingMetadata = async (
+  deps: MaintenanceDeps,
+  pending: { gmailMessageId: string; id: string }[]
+): Promise<{ errors: number; refreshed: number; retryLater: string | null }> => {
+  let refreshed = 0;
+  let errors = 0;
+  let retryLater: string | null = null;
+  const step = async (index: number): Promise<void> => {
+    const message = pending[index];
+    if (!message || !deps.budget.canSpend(STAGE_ESTIMATES_MS.metadataFetch, deps.now())) {
+      return;
+    }
+    await admit(deps, STAGE_ESTIMATES_MS.metadataFetch);
+    const result = await refreshMessageMetadata(
+      deps.db,
+      deps.client,
+      message,
+      deps.now()
+    );
+    if (result.status === "retry_later") {
+      // Environmental failure: stop this batch so the account can recover, and
+      // leave the row pending for a later tick.
+      retryLater = result.errorCode;
+      return;
+    }
+    if (result.status === "error") {
+      errors += 1;
+    } else {
+      refreshed += 1;
+    }
+    await step(index + 1);
+  };
+  await step(0);
+  return { errors, refreshed, retryLater };
+};
+
+const runMetadataRefresh = async (
+  deps: MaintenanceDeps,
+  operationId: string
+): Promise<"completed" | "deferred"> => {
+  const pending = await listMessagesMissingMetadata(
+    deps.db,
+    deps.accountId,
+    deps.config.limits.maxMetadataRefreshPerTick
+  );
+  const { errors, refreshed, retryLater } = await refreshPendingMetadata(deps, pending);
+  const remaining = await countMessageMetadata(deps.db, deps.accountId);
+  const progressJson = JSON.stringify({
+    errors,
+    failed: remaining.errors,
+    lastErrorCode: retryLater,
+    refreshed,
+    remaining: remaining.missing,
+  });
+  if (remaining.missing === 0 && retryLater === null) {
+    await markOperation(
+      deps.db,
+      operationId,
+      { completedAt: deps.now(), progressJson, status: "completed" },
+      deps.now()
+    );
+    return "completed";
+  }
+  await markOperation(
+    deps.db,
+    operationId,
+    { progressJson, status: "queued" },
+    deps.now()
+  );
+  return "deferred";
+};
+
+const runSyncOperation = async (
+  deps: MaintenanceDeps,
+  operationId: string
+): Promise<"completed" | "deferred"> => {
+  const mailbox = await getMailbox(deps.db);
+  let result: Awaited<ReturnType<typeof runIncrementalSync>>;
+  if (
+    mailbox?.syncPhase === "recovery_scan" ||
+    mailbox?.syncPhase === "recovery_catchup"
+  ) {
+    result = await runRecovery(deps);
+  } else if (mailbox?.committedHistoryId) {
+    result = await runIncrementalSync(deps);
+  } else {
+    result = await runBootstrap(deps);
+  }
+  const progressJson = JSON.stringify({ discovered: result.discovered });
+  if (result.completed) {
+    await markOperation(
+      deps.db,
+      operationId,
+      { completedAt: deps.now(), progressJson, status: "completed" },
+      deps.now()
+    );
+    return "completed";
+  }
+  await markOperation(deps.db, operationId, { progressJson }, deps.now());
+  return "deferred";
+};
 
 export const processQueuedMaintenanceOperations = async (
   deps: MaintenanceDeps
@@ -57,7 +169,9 @@ export const processQueuedMaintenanceOperations = async (
         inArray(operations.status, ["queued", "running"])
       )
     )
-    .orderBy(asc(operations.createdAt))
+    // Oldest-touched first: an operation that defers or fails repeatedly is
+    // re-marked each tick, which rotates it behind other queued work.
+    .orderBy(asc(operations.updatedAt))
     .limit(1);
 
   const [operation] = queued;
@@ -76,37 +190,9 @@ export const processQueuedMaintenanceOperations = async (
   try {
     await admit(deps);
     if (operation.kind === "sync") {
-      const mailbox = await getMailbox(deps.db);
-      let result: Awaited<ReturnType<typeof runIncrementalSync>>;
-      if (
-        mailbox?.syncPhase === "recovery_scan" ||
-        mailbox?.syncPhase === "recovery_catchup"
-      ) {
-        result = await runRecovery(deps);
-      } else if (mailbox?.committedHistoryId) {
-        result = await runIncrementalSync(deps);
-      } else {
-        result = await runBootstrap(deps);
-      }
-      if (result.completed) {
-        await markOperation(
-          deps.db,
-          operation.id,
-          {
-            completedAt: deps.now(),
-            progressJson: JSON.stringify({ discovered: result.discovered }),
-            status: "completed",
-          },
-          deps.now()
-        );
+      if ((await runSyncOperation(deps, operation.id)) === "completed") {
         outcome.completed += 1;
       } else {
-        await markOperation(
-          deps.db,
-          operation.id,
-          { progressJson: JSON.stringify({ discovered: result.discovered }) },
-          deps.now()
-        );
         outcome.deferred += 1;
       }
       return outcome;
@@ -115,6 +201,15 @@ export const processQueuedMaintenanceOperations = async (
     if (!deps.budget.canSpend(STAGE_ESTIMATES_MS.mutation, deps.now())) {
       await markOperation(deps.db, operation.id, { status: "queued" }, deps.now());
       outcome.deferred += 1;
+      return outcome;
+    }
+
+    if (operation.kind === "metadata_refresh") {
+      if ((await runMetadataRefresh(deps, operation.id)) === "completed") {
+        outcome.completed += 1;
+      } else {
+        outcome.deferred += 1;
+      }
       return outcome;
     }
 

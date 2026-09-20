@@ -12,6 +12,7 @@ import {
   messages,
   operations,
 } from "../src/db/schema";
+import { GmailError } from "../src/gmail/errors";
 import { setMessageClientFactory } from "../src/routes/messages";
 import { resetDatabase } from "./helpers/db";
 import { fakeGmail, fullMessage } from "./helpers/gmail-fake";
@@ -327,59 +328,36 @@ describe("messages API", () => {
     expect(invalid.status).toBe(400);
   });
 
-  it("returns detail with ownership, corrections and resilient enrichment", async () => {
+  it("returns detail with ownership, corrections and stored metadata", async () => {
     const db = createDb(env.DB);
     await resetDatabase(db);
     const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-detail" });
+    await db
+      .update(messages)
+      .set({
+        fromAddress: "Sender <sender@example.test>",
+        metadataFetchedAt: 1_700_000_000_000,
+        metadataState: "available",
+        subject: "Subject line",
+      })
+      .where(eq(messages.gmailMessageId, gmailId));
 
-    setMessageClientFactory(
-      () =>
-        fakeGmail({
-          getMessage: (id, format) =>
-            format === "metadata"
-              ? {
-                  ...fullMessage(id, ""),
-                  payload: {
-                    headers: [
-                      { name: "Subject", value: "Subject line" },
-                      { name: "From", value: "Sender <sender@example.test>" },
-                    ],
-                    mimeType: "text/plain",
-                  },
-                }
-              : fullMessage(id, "body"),
-        }).client
+    const withMetadata = await api(
+      `/api/v1/messages/${gmailId}?includeGmailMetadata=true`,
+      { headers: AUTH }
     );
-
-    const enriched = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
-      headers: AUTH,
-    });
-    expect(enriched.status).toBe(200);
-    const body = await enriched.json<{
-      messageId: string;
-      gmailMetadata: { status: string; subject: string | null };
-      ownership: { appOwnedLabelIds: string[] };
+    expect(withMetadata.status).toBe(200);
+    const body = await withMetadata.json<{
       corrections: unknown[];
+      gmailMetadata: { status: string; subject: string | null };
+      messageId: string;
+      ownership: { appOwnedLabelIds: string[] };
     }>();
     expect(body).toMatchObject({
       corrections: [],
       gmailMetadata: { status: "available", subject: "Subject line" },
       messageId: gmailId,
     });
-
-    setMessageClientFactory(
-      () =>
-        fakeGmail({
-          getMessage: () => {
-            throw new Error("network down");
-          },
-        }).client
-    );
-    const failing = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
-      headers: AUTH,
-    });
-    expect(failing.status).toBe(200);
-    const failingBody = await failing.json<{ gmailMetadata: { status: string } }>();
 
     const notRequested = await api(`/api/v1/messages/${gmailId}`, { headers: AUTH });
     const notRequestedBody = await notRequested.json<{
@@ -389,13 +367,227 @@ describe("messages API", () => {
     const missing = await api("/api/v1/messages/gm-missing", { headers: AUTH });
 
     expect({
-      failingStatus: failingBody.gmailMetadata.status,
       missingStatus: missing.status,
       notRequestedStatus: notRequestedBody.gmailMetadata.status,
-    }).toStrictEqual({
-      failingStatus: "error",
-      missingStatus: 404,
-      notRequestedStatus: "not_requested",
+    }).toStrictEqual({ missingStatus: 404, notRequestedStatus: "not_requested" });
+  });
+
+  it("never calls Gmail while reading a message detail", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-no-call",
+    });
+    const gmail = fakeGmail({
+      getMessage: () => {
+        throw new Error("detail reads must not call Gmail");
+      },
+    });
+    setMessageClientFactory(() => gmail.client);
+
+    const detail = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
+      headers: AUTH,
+    });
+    const body = await detail.json<{ gmailMetadata: { status: string } }>();
+
+    expect(gmail.calls).toStrictEqual([]);
+    expect(body.gmailMetadata.status).toBe("missing");
+  });
+
+  it("stores fetched metadata and reuses it without another Gmail call", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-store" });
+
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: (id) => ({
+            ...fullMessage(id, ""),
+            payload: {
+              headers: [
+                { name: "Subject", value: "Subject line" },
+                { name: "From", value: "Sender <sender@example.test>" },
+              ],
+              mimeType: "text/plain",
+            },
+          }),
+        }).client
+    );
+    await api(`/api/v1/messages/${gmailId}/metadata`, { headers: AUTH, method: "POST" });
+
+    const stored = await db
+      .select({
+        fromAddress: messages.fromAddress,
+        metadataState: messages.metadataState,
+        subject: messages.subject,
+      })
+      .from(messages)
+      .where(eq(messages.gmailMessageId, gmailId));
+    expect(stored).toStrictEqual([
+      {
+        fromAddress: "Sender <sender@example.test>",
+        metadataState: "available",
+        subject: "Subject line",
+      },
+    ]);
+
+    const reusedFake = fakeGmail({
+      getMessage: () => {
+        throw new Error("should not fetch stored metadata");
+      },
+    });
+    setMessageClientFactory(() => reusedFake.client);
+    const reused = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
+      headers: AUTH,
+    });
+    expect(reusedFake.calls).toStrictEqual([]);
+    expect(reused.status).toBe(200);
+  });
+
+  it("keeps transient metadata failures pending", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-retry" });
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: () => {
+            throw new GmailError("server_error", "Gmail is unavailable");
+          },
+        }).client
+    );
+
+    const failing = await api(`/api/v1/messages/${gmailId}/metadata`, {
+      headers: AUTH,
+      method: "POST",
+    });
+    const failingBody = await failing.json<{ error: { code: string } }>();
+    const stillMissing = await db
+      .select({ metadataState: messages.metadataState })
+      .from(messages)
+      .where(eq(messages.gmailMessageId, gmailId));
+
+    expect(failing.status).toBe(503);
+    expect(failingBody.error.code).toBe("DEPENDENCY_UNAVAILABLE");
+    expect(stillMissing).toStrictEqual([{ metadataState: "missing" }]);
+  });
+
+  it("records terminal metadata failures so they can be retried explicitly", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-terminal",
+    });
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: () => {
+            throw new GmailError("permission_denied", "no access to this message");
+          },
+        }).client
+    );
+
+    const response = await api(`/api/v1/messages/${gmailId}/metadata`, {
+      headers: AUTH,
+      method: "POST",
+    });
+    const body = await response.json<{ status: string }>();
+    const stored = await db
+      .select({
+        metadataErrorCode: messages.metadataErrorCode,
+        metadataState: messages.metadataState,
+      })
+      .from(messages)
+      .where(eq(messages.gmailMessageId, gmailId));
+
+    expect(body.status).toBe("error");
+    expect(stored).toStrictEqual([
+      { metadataErrorCode: "permission_denied", metadataState: "error" },
+    ]);
+  });
+
+  it("lists stored metadata without calling Gmail", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-list" });
+    await db
+      .update(messages)
+      .set({
+        fromAddress: "Sender <sender@example.test>",
+        metadataFetchedAt: 1_700_000_000_000,
+        metadataState: "available",
+        subject: "Listed subject",
+      })
+      .where(eq(messages.gmailMessageId, gmailId));
+    const gmail = fakeGmail({
+      getMessage: () => {
+        throw new Error("list requests must not call Gmail");
+      },
+    });
+    setMessageClientFactory(() => gmail.client);
+
+    const response = await api("/api/v1/messages", { headers: AUTH });
+    const body = await response.json<{
+      items: { from: string | null; metadataState: string; subject: string | null }[];
+    }>();
+
+    expect(gmail.calls).toStrictEqual([]);
+    expect(body.items[0]).toMatchObject({
+      from: "Sender <sender@example.test>",
+      metadataState: "available",
+      subject: "Listed subject",
+    });
+  });
+
+  it("refreshes metadata on demand and returns the stored values", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-force" });
+    await db
+      .update(messages)
+      .set({
+        metadataFetchedAt: 1_700_000_000_000,
+        metadataState: "available",
+        subject: "Stale subject",
+      })
+      .where(eq(messages.gmailMessageId, gmailId));
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: (id) => ({
+            ...fullMessage(id, ""),
+            payload: {
+              headers: [{ name: "Subject", value: "Fresh subject" }],
+              mimeType: "text/plain",
+            },
+          }),
+        }).client
+    );
+
+    const refreshed = await api(`/api/v1/messages/${gmailId}/metadata`, {
+      headers: AUTH,
+      method: "POST",
+    });
+    const body = await refreshed.json<{ status: string; subject: string | null }>();
+    const detail = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
+      headers: AUTH,
+    });
+    const detailBody = await detail.json<{
+      gmailMetadata: { status: string; subject: string | null };
+    }>();
+
+    expect(refreshed.status).toBe(200);
+    expect(body).toStrictEqual({
+      errorCode: null,
+      fetchedAt: expect.any(String),
+      from: null,
+      status: "available",
+      subject: "Fresh subject",
+    });
+    expect(detailBody.gmailMetadata).toMatchObject({
+      status: "available",
+      subject: "Fresh subject",
     });
   });
 

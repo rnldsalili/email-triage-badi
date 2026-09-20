@@ -47,6 +47,7 @@ Workers AI model identifier is exactly `typesafe/jev`, without an `@cf/` prefix.
 | `DEFAULT_MODE` | Variable | `dry_run`; initializes persistent mode only on first setup |
 | `INITIAL_LOOKBACK_DAYS` | Variable | `7` |
 | `MAX_JOBS_PER_TICK` | Variable | Starting ceiling `20`; lower when measured stage costs require it |
+| `MAX_METADATA_REFRESH_PER_TICK` | Variable | `25`; maximum stored messages whose Subject/From are refreshed per maintenance tick |
 | `TICK_WALL_BUDGET_MS` | Variable | `120000`; elapsed-time admission budget, not CPU allowance |
 | `CHECKPOINT_RESERVE_MS` | Variable | `15000`; time reserved for durable checkpoints and lease handling |
 | `RUN_LEASE_MS` | Variable | `180000`; renewable run lease |
@@ -96,6 +97,18 @@ Setting apply mode does not automatically replay all completed dry-run results. 
 
 ## 5. Daily operation and monitoring
 
+The dashboard at the Worker's domain is the primary interface. It is a React app served from the same Worker's static assets; `/api/v1/*` and `/healthz` always run the Worker, and every other path falls back to `index.html`. Open it in a browser and paste `ADMIN_API_TOKEN` once: the Worker verifies it and sets an HTTP-only `etb_session` cookie (30 days, `SameSite=Strict`, `Secure` over HTTPS). The token is never stored in the browser. Rotating `ADMIN_API_TOKEN` invalidates every session. Cookie-authenticated mutations must send the `x-etb-csrf` header, which the dashboard does automatically.
+
+Dashboard coverage:
+
+- **Overview** — mode switch, mailbox/auth state, last discovery, queued/failed jobs, AI budget, label readiness, missing metadata, recent activity, plus **Process now** (bounded immediate tick), **Sync now** and **Fetch missing subjects**.
+- **Messages** — filter by topic, review state and processing status; each row shows subject, sender, topic, action values (including `Uncertain`) and processing state.
+- **Message detail** — stored probabilities, review reasons, job stage/deferral/last error, correction history, and actions to correct, retry, reprocess, apply a saved result, or open the message in Gmail.
+- **Activity** — operation history with progress and errors, plus a bounded date-range backfill form.
+- **Labels** — mapping inventory, conflicts and the approved taxonomy, with **Refresh inventory** and a confirmed **Run label migration** that records the plan operation it was based on.
+
+Because the dashboard runs the same API, everything below remains available from the CLI for recovery and automation.
+
 Log JSON events with request/run/job IDs, stage, durations, counts, error class, model version and token totals. Never log bodies, OAuth tokens, authorization codes or raw headers. Keep message identifiers in the database; operational logs can use internal job IDs.
 
 Monitor:
@@ -112,6 +125,10 @@ Monitor:
 - Correction frequency by label and model/rubric version.
 
 Suggested operational triggers: inspect sync after 15 minutes without a successful tick, inspect a growing backlog older than 30 minutes, and investigate any repeated auth or label-write failure. These are proposed alert thresholds, not service guarantees.
+
+### Login protection
+
+`POST /api/v1/auth/session` compares a bearer token in constant time and logs failed attempts (`dashboard_login_failed`) without recording the value, but it has no built-in throttle. Add a Cloudflare WAF rate-limiting rule for that path (for example five attempts per minute per IP) and keep `ADMIN_API_TOKEN` high-entropy; see DEPLOY.md. Rotating the token invalidates every existing session.
 
 ## 6. Recovery procedures
 
@@ -137,7 +154,32 @@ History 404 enters the documented current-inbox recovery scan automatically. Che
 
 ### Incorrect classification
 
-Submit a correction for the affected dimension. Add an appropriately redacted example to the evaluation set. Change the rubric only after testing other categories for regressions.
+Submit a correction for the affected dimension from the dashboard or API. Add an appropriately redacted example to the evaluation set. Change the rubric only after testing other categories for regressions.
+
+### Missing subjects or senders
+
+Messages classified before header storage have `metadata_state = 'missing'` and show no subject in the dashboard. Use **Fetch missing subjects** (or `POST /api/v1/messages/metadata-refresh`). The maintenance runner refreshes at most `MAX_METADATA_REFRESH_PER_TICK` messages per tick, resumes automatically until none remain, and never re-runs inference. Reading a message never fetches from Gmail; opening a detail view with no stored headers makes exactly one metadata call.
+
+State transitions to expect:
+
+- `available` — headers stored and reused without another Gmail call.
+- `unavailable` — the message no longer exists in Gmail.
+- `error` — the fetch failed terminally (for example `permission_denied`). The row leaves the pending set so it cannot block progress; the overview's button then reads **Fetch missing subjects (retry failures)** and re-arms those rows.
+- `missing` — either never fetched or an environmental failure (rate limit, network, auth). The batch stops on environmental failures so the account can recover, and the operation is re-queued; because queued operations are processed oldest-touched first, a repeatedly failing refresh rotates behind other work instead of starving it.
+
+A single failing message never blocks the rest of the batch. A metadata refresh never re-runs inference and never spends AI budget.
+
+Opening a message in the dashboard is the only action that fetches headers; the message list, status and operations views are D1-only.
+
+### Security headers and framing
+
+`web/public/_headers` ships `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` with the dashboard assets, plus immutable caching for hashed `/assets/*` files. Cloudflare serves them from the assets directory; the SPA fallback response is covered too. Keep them in place when changing the frontend; the dashboard loads no third-party scripts.
+
+Because the fallback serves `index.html` with a 200 for any unmatched path, an unknown or removed asset path also returns HTML rather than 404. `nosniff` prevents the browser from executing it, but if you need a hard 404 for a path, add it to `run_worker_first` and answer it from the Worker.
+
+### Stuck or slow backlog
+
+Check **Activity** for queued operations and deferred jobs. Use **Process now** (`POST /api/v1/run`) to start one bounded 60-second tick instead of waiting for the five-minute cron. It is lease-protected: if a scheduled tick is already running, the manual trigger does no duplicate work. The tick is awaited, so the button can spin for up to a minute while the work runs.
 
 ### Label renamed or deleted outside the service
 

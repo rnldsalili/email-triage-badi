@@ -29,6 +29,7 @@ export const OPERATION_KINDS = [
   "backfill",
   "migration_plan",
   "migrate",
+  "metadata_refresh",
   "reprocess",
   "apply",
   "correction",
@@ -51,6 +52,13 @@ export const JOB_STAGES = [
 ] as const;
 
 export const MIGRATION_STATES = ["pending", "ready", "conflict", "missing"] as const;
+
+export const MESSAGE_METADATA_STATES = [
+  "missing",
+  "available",
+  "unavailable",
+  "error",
+] as const;
 
 export const MUTATION_STATUSES = ["pending", "applied", "superseded", "failed"] as const;
 
@@ -198,6 +206,7 @@ export const messages = sqliteTable(
     applicationStatus: text("application_status").notNull().default("not_applied"),
     dimensionLocksJson: text("dimension_locks_json").notNull().default("{}"),
     firstSeenAt: integer("first_seen_at").notNull(),
+    fromAddress: text("from_address"),
     gmailMessageId: text("gmail_message_id").notNull(),
     id: text("id").primaryKey(),
     lastGeneration: integer("last_generation").notNull().default(0),
@@ -205,10 +214,16 @@ export const messages = sqliteTable(
       .notNull()
       .default("[]"),
     latestClassificationId: text("latest_classification_id"),
+    metadataErrorCode: text("metadata_error_code"),
+    metadataFetchedAt: integer("metadata_fetched_at"),
+    metadataState: text("metadata_state", { enum: MESSAGE_METADATA_STATES })
+      .notNull()
+      .default("missing"),
     processingStatus: text("processing_status", { enum: JOB_STAGES })
       .notNull()
       .default("pending"),
     receivedAt: integer("received_at").notNull(),
+    subject: text("subject"),
     threadId: text("thread_id").notNull(),
   },
   (table) => [
@@ -217,6 +232,11 @@ export const messages = sqliteTable(
       table.gmailMessageId
     ),
     index("messages_first_seen_idx").on(table.accountId, table.firstSeenAt),
+    index("messages_metadata_idx").on(
+      table.accountId,
+      table.metadataState,
+      table.firstSeenAt
+    ),
   ]
 );
 

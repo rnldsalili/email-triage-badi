@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-21T00:00:00Z",
+  "title": "Design System: Badi",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Paper" },
+      "paper-deep": { "role": "neutral", "displayName": "Paper Deep" },
+      "sheet": { "role": "neutral", "displayName": "Sheet" },
+      "sheet-blue": { "role": "neutral", "displayName": "Ledger Blue" },
+      "ink": { "role": "neutral", "displayName": "Ledger Ink" },
+      "ink-soft": { "role": "neutral", "displayName": "Soft Ink" },
+      "ink-faint": { "role": "neutral", "displayName": "Faint Ink" },
+      "rule": { "role": "neutral", "displayName": "Rule" },
+      "rule-strong": { "role": "neutral", "displayName": "Strong Rule" },
+      "nav": { "role": "neutral", "displayName": "Index Rail" },
+      "nav-active": { "role": "primary", "displayName": "Active Index" },
+      "primary": { "role": "primary", "displayName": "Ledger Teal" },
+      "primary-deep": { "role": "primary", "displayName": "Deep Teal" },
+      "danger": { "role": "semantic", "displayName": "Record Coral" },
+      "ok": { "role": "semantic", "displayName": "Quiet Green" },
+      "warn": { "role": "semantic", "displayName": "Verification Amber" },
+      "control": { "role": "neutral", "displayName": "Control" },
+      "badge": { "role": "neutral", "displayName": "Badge" }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Body", "purpose": "Operational content and controls." },
+      "headline": { "displayName": "Headline", "purpose": "Route titles and first-viewport hierarchy." },
+      "title": { "displayName": "Title", "purpose": "Sheet and section headings." },
+      "brand": { "displayName": "Brand", "purpose": "Badi wordmark in the index rail." },
+      "label": { "displayName": "Label", "purpose": "Field labels, table heads, and metadata." },
+      "badge": { "displayName": "Badge", "purpose": "Named state and review marks." },
+      "mono": { "displayName": "Mono", "purpose": "Technical identifiers and measurements." }
+    },
+    "shadows": [
+      { "name": "sheet", "value": "0 10px 26px rgb(28 57 57 / 7%)", "purpose": "Current review sheet separation" }
+    ],
+    "motion": [
+      { "name": "control", "duration": "160ms", "purpose": "State feedback on controls" }
+    ],
+    "breakpoints": [
+      { "name": "records", "value": "880px", "purpose": "Table-to-record transformation" },
+      { "name": "rail", "value": "720px", "purpose": "Index rail becomes mobile header" },
+      { "name": "single-column", "value": "440px", "purpose": "Single-column stat and compact header" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Teal action for the next trusted step.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Review message</button>",
+      "css": ".ds-primary{background:#0b5a69;border:1px solid #0b5a69;border-radius:4px;color:#fff;min-height:38px;padding:8px 13px;font-weight:650}"
+    },
+    {
+      "name": "Review Mark",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Amber named state for a classification that needs the owner's eye.",
+      "html": "<span class=\"ds-badge ds-warn\">Needs review</span>",
+      "css": ".ds-badge{background:#e4ecea;border:1px solid #d1dfdc;border-radius:999px;color:#405c64;font-size:11px;padding:3px 8px}.ds-warn{background:#fff0c9;border-color:#ebd28c;color:#8b5c13}"
+    },
+    {
+      "name": "Review Ledger",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The first-viewport work sheet for uncertain classifications.",
+      "html": "<section class=\"ds-ledger\"><h2>Needs your review</h2><p>Verify the evidence before Badi writes a label.</p></section>",
+      "css": ".ds-ledger{background:#f0f6f6;border:1px solid #b9cfce;border-top:2px solid #0b5a69;border-radius:6px;box-shadow:0 10px 26px rgb(28 57 57 / 7%);padding:20px}"
+    },
+    {
+      "name": "Index Navigation",
+      "kind": "nav",
+      "refersTo": "navigation-item",
+      "description": "Text and line-glyph navigation with an indexed active tab.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-active\" aria-current=\"page\" href=\"#/\">Review desk</a><a href=\"#/messages\">Messages</a></nav>",
+      "css": ".ds-nav a{border:1px solid transparent;border-radius:4px;color:#405c64;min-height:44px;padding:9px 11px}.ds-nav a.ds-active{background:#d4e8e1;border-color:#b4d0c9;color:#084552;font-weight:650}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Classification Ledger",
+    "overview": "Badi is a calm finding aid for reviewing uncertain Gmail classifications before they become labels. Cool paper surfaces, blue-black ink, ruled dividers, indexed navigation, and named signal colors make evidence and recovery easy to scan.",
+    "keyCharacteristics": [
+      "Cool paper ground with ledger-blue review sheets.",
+      "Ruled records and indexed navigation instead of anonymous dark cards.",
+      "Teal actions, amber verification, quiet green success, and coral consequence.",
+      "System sans for work and compact mono for technical values."
+    ],
+    "rules": [
+      { "name": "The Named State Rule", "body": "Signal color never stands alone; every semantic mark carries readable text.", "section": "colors" },
+      { "name": "The Review-First Rule", "body": "The first viewport leads with uncertain messages and a direct Review action; operations support the work rather than replacing it.", "section": "layout" }
+    ],
+    "dos": [
+      "Lead with messages that need a human decision.",
+      "Keep Gmail as the reading destination and Badi as the review layer.",
+      "Preserve keyboard order, screen-reader labels, and touch targets.",
+      "Keep the ledger grammar consistent across every route."
+    ],
+    "donts": [
+      "Do not reintroduce the incumbent dark dashboard.",
+      "Do not use color as the only state indication.",
+      "Do not use gradients, glass, or monospace as decoration.",
+      "Do not invent mailbox claims or unverified visual assets."
+    ]
+  }
+}

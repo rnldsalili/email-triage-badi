@@ -59,6 +59,7 @@ const rawEnvSchema = z
     MAX_BACKFILL_MESSAGES: z.coerce.number().int().min(1).max(100_000).default(5000),
     MAX_BODY_CHARACTERS: z.coerce.number().int().min(1).max(1_000_000).default(12_000),
     MAX_JOBS_PER_TICK: z.coerce.number().int().min(1).max(1000).default(20),
+    MAX_METADATA_REFRESH_PER_TICK: z.coerce.number().int().min(1).max(500).default(25),
     OWNER_ALIASES_JSON: jsonStringArray("[]"),
     OWNER_TIME_ZONE: timeZone.default("UTC"),
     RUN_LEASE_MS: z.coerce.number().int().min(1000).default(180_000),
@@ -106,6 +107,7 @@ export interface AppConfig {
     maxAiCallsPerDay: number;
     maxBodyCharacters: number;
     detailRetentionDays: number;
+    maxMetadataRefreshPerTick: number;
   };
   secrets: {
     adminApiToken: string;
@@ -154,6 +156,7 @@ export const parseConfig = (rawEnv: Record<string, unknown>): AppConfig => {
       maxBackfillMessages: env.MAX_BACKFILL_MESSAGES,
       maxBodyCharacters: env.MAX_BODY_CHARACTERS,
       maxJobsPerTick: env.MAX_JOBS_PER_TICK,
+      maxMetadataRefreshPerTick: env.MAX_METADATA_REFRESH_PER_TICK,
       runLeaseMs: env.RUN_LEASE_MS,
       tickWallBudgetMs: env.TICK_WALL_BUDGET_MS,
     },

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import type { Db } from "../client";
 import { operations } from "../schema";
@@ -68,8 +68,49 @@ export const enqueueOperation = async (
 
 export const getOperation = async (
   db: Db,
-  id: string
+  id: string,
+  accountId?: string
 ): Promise<Operation | undefined> => {
-  const rows = await db.select().from(operations).where(eq(operations.id, id)).limit(1);
+  const rows = await db
+    .select()
+    .from(operations)
+    .where(
+      accountId
+        ? and(eq(operations.id, id), eq(operations.accountId, accountId))
+        : eq(operations.id, id)
+    )
+    .limit(1);
   return rows[0];
+};
+
+export interface ListOperationsFilters {
+  accountId: string;
+  kind?: string;
+  limit: number;
+  cursor?: { createdAt: number; id: string };
+  status?: string;
+}
+
+export const listOperations = (
+  db: Db,
+  filters: ListOperationsFilters
+): Promise<Operation[]> => {
+  const conditions = [sql`${operations.accountId} = ${filters.accountId}`];
+  if (filters.kind) {
+    conditions.push(sql`${operations.kind} = ${filters.kind}`);
+  }
+  if (filters.status) {
+    conditions.push(sql`${operations.status} = ${filters.status}`);
+  }
+  if (filters.cursor) {
+    conditions.push(
+      sql`(${operations.createdAt} < ${filters.cursor.createdAt} OR (${operations.createdAt} = ${filters.cursor.createdAt} AND ${operations.id} < ${filters.cursor.id}))`
+    );
+  }
+  return db
+    .select()
+    .from(operations)
+    .where(sql.join(conditions, sql` AND `))
+    .orderBy(desc(operations.createdAt), desc(operations.id))
+    .limit(filters.limit);
 };

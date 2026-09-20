@@ -22,5 +22,6 @@ export const STAGE_ESTIMATES_MS = {
   classification: 45_000,
   discoveryPage: 20_000,
   messageFetch: 20_000,
+  metadataFetch: 5000,
   mutation: 20_000,
 } as const;

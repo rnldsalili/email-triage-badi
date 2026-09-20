@@ -1,15 +1,17 @@
 import { Hono } from "hono";
+import { z } from "zod";
 
 import type { AppEnv } from "../app-env";
 import { createDb } from "../db/client";
 import { getControl } from "../db/repositories/control";
-import { enqueueOperation } from "../db/repositories/operations";
+import { enqueueOperation, getOperation } from "../db/repositories/operations";
 import { ApiError } from "../http/errors";
 import {
   requireIdempotencyKey,
   withIdempotency,
   operationWrite,
 } from "../http/idempotency";
+import { readJsonBody } from "../http/validation";
 import { getLabelMappings } from "../services/labels";
 import {
   LABEL_DEFINITIONS,
@@ -17,6 +19,10 @@ import {
   LEGACY_LABEL_MAPPINGS,
   PARENT_CONTAINERS,
 } from "../taxonomy/labels";
+
+const migrateSchema = z
+  .object({ planOperationId: z.string().min(1).optional() })
+  .strict();
 
 export const labelRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
@@ -90,18 +96,36 @@ export const labelRoutes = new Hono<AppEnv>()
       throw new ApiError("CONFLICT", "Label migration requires apply mode");
     }
     const key = requireIdempotencyKey(c.req.header("idempotency-key"));
+    const hasBody = (c.req.header("content-length") ?? "0") !== "0";
+    const body = hasBody ? await readJsonBody(c, migrateSchema) : {};
+    const planOperationId = body.planOperationId ?? null;
+    if (planOperationId) {
+      const plan = await getOperation(db, planOperationId);
+      if (
+        !plan ||
+        plan.accountId !== accountId ||
+        plan.kind !== "migration_plan" ||
+        plan.status !== "completed"
+      ) {
+        throw new ApiError(
+          "VALIDATION_ERROR",
+          "planOperationId must reference a completed label migration plan"
+        );
+      }
+    }
     const now = Date.now();
+    const request = { planOperationId };
     const response = await withIdempotency(
       db,
       accountId,
-      { key, payload: {}, route: "labels/migrate" },
+      { key, payload: request, route: "labels/migrate" },
       now,
       () => {
         const operationId = crypto.randomUUID();
         return {
-          body: { operationId },
+          body: { operationId, planOperationId },
           status: 202,
-          writes: [operationWrite(db, operationId, accountId, "migrate", {}, now)],
+          writes: [operationWrite(db, operationId, accountId, "migrate", request, now)],
         };
       }
     );
