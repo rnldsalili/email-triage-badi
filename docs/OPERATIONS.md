@@ -81,7 +81,7 @@ Google documents a seven-day refresh-token lifetime for External apps in Testing
 ## 4. Deployment sequence
 
 1. Finish the integration spike and local checks.
-2. Provision D1. Review committed Drizzle Kit-generated SQL migrations, verify them locally, then apply those same files with Wrangler to the intended environment. Keep Wrangler's `migrations_dir` aligned with Drizzle Kit's output. Schema changes run before dependent application code is deployed, using backward-compatible changes where needed.
+2. Provision D1. Review committed Drizzle Kit-generated SQL migrations, verify them locally, then apply those same files with Wrangler to the intended environment. Keep Wrangler's `migrations_dir` aligned with Drizzle Kit's output. Schema changes run before dependent application code is deployed, using backward-compatible changes where needed. Migration history is a single consolidated baseline (`0000_initial.sql`); apply it only to a fresh, empty database, because renaming applied migrations conflicts with Wrangler's migration tracking.
 3. Configure AI/D1 bindings, variables, secrets and production cron in Wrangler.
 4. Deploy with default dry-run mode.
 5. Verify health, authenticated status, Gmail owner identity and a synthetic Jev call. Verify explicit gateway access, billing units and disabled content logging/cache behavior as part of this check.

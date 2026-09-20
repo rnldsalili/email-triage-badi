@@ -23,7 +23,7 @@
     "oauth:bootstrap": "bun run scripts/oauth-bootstrap.ts",
     "oauth:check": "bun run scripts/oauth-bootstrap.ts --check",
     "labels:inventory": "bun run scripts/label-inventory.ts",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy --env production"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

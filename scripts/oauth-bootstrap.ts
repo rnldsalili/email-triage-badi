@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -10,15 +11,19 @@ import { DEV_VARS_PATH, loadDevVars, saveDevVars } from "./lib/dev-vars";
 
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 const GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const DEFAULT_REDIRECT_URI = "http://localhost:8788/oauth2callback";
 const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 
-const HELP = `Usage: bun run oauth:bootstrap [--check]
+const HELP = `Usage: bun run oauth:bootstrap [--check] [--no-open]
 
 Interactive mode (default):
-  Starts a localhost callback server, opens the Google consent screen,
+  Validates the OAuth client credentials against Google, starts a localhost
+  callback server, opens the Google consent screen in the default browser,
   exchanges the authorization code for tokens, verifies the Gmail profile,
   and stores GOOGLE_REFRESH_TOKEN in ${DEV_VARS_PATH} (gitignored).
+
+  --no-open  print the authorization URL without opening a browser
 
 Check mode (--check):
   Uses the existing refresh token to fetch a fresh access token and read
@@ -61,6 +66,67 @@ const safeEqual = (a: string, b: string): boolean => {
     return false;
   }
   return timingSafeEqual(left, right);
+};
+
+const openInBrowser = (url: string): void => {
+  const commands: Record<string, { args: string[]; command: string }> = {
+    darwin: { args: [url], command: "open" },
+    win32: { args: ["/c", "start", "", url], command: "cmd" },
+  };
+  const { args, command } = commands[process.platform] ?? {
+    args: [url],
+    command: "xdg-open",
+  };
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.on("error", () => {
+    console.log("Could not open a browser automatically; open the URL above manually.");
+  });
+  child.unref();
+};
+
+const assertClientCredentials = async (
+  clientId: string,
+  clientSecret: string,
+  redirectUri: string
+): Promise<void> => {
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    code: "preflight-client-validation",
+    grant_type: "authorization_code",
+    redirect_uri: redirectUri,
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(TOKEN_ENDPOINT, {
+      body: body.toString(),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    throw new Error(
+      "Could not reach Google's token endpoint to validate the OAuth client",
+      {
+        cause: error,
+      }
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as {
+    error?: string;
+    error_description?: string;
+  } | null;
+
+  if (payload?.error !== "invalid_client") {
+    return;
+  }
+  throw new Error(
+    `Google rejected GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (${
+      payload.error_description ?? "invalid_client"
+    }). The OAuth client may have been deleted or belong to a different Google Cloud project; verify it under APIs & Services -> Credentials in the project whose consent screen is configured.`
+  );
 };
 
 interface GmailProfile {
@@ -149,6 +215,7 @@ const failCallback = (response: ServerResponse, message: string): never => {
 
 interface CallbackOptions {
   authUrl: string;
+  openBrowser: boolean;
   port: number;
   redirect: URL;
   redirectUri: string;
@@ -159,13 +226,17 @@ const waitForAuthorizationCode = async (
   server: Server,
   options: CallbackOptions
 ): Promise<string> => {
-  const { authUrl, port, redirect, redirectUri, state } = options;
+  const { authUrl, openBrowser, port, redirect, redirectUri, state } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FLOW_TIMEOUT_MS);
 
   server.listen(port, redirect.hostname, () => {
     console.log("Open this URL in a browser and approve access:");
     console.log(authUrl);
+    if (openBrowser) {
+      console.log("Opening the URL in your default browser...");
+      openInBrowser(authUrl);
+    }
     console.log(`Waiting for the callback on ${redirectUri} (5 minute limit)...`);
   });
 
@@ -220,11 +291,19 @@ const waitForAuthorizationCode = async (
   }
 };
 
-const runInteractiveMode = async (): Promise<void> => {
+interface InteractiveOptions {
+  openBrowser: boolean;
+}
+
+const runInteractiveMode = async (options: InteractiveOptions): Promise<void> => {
   const config = resolveConfig();
   if (!config.clientId || !config.clientSecret) {
     throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required; see --help");
   }
+
+  console.log(`Using OAuth client ${config.clientId}`);
+  await assertClientCredentials(config.clientId, config.clientSecret, config.redirectUri);
+  console.log("OAuth client credentials accepted by Google.");
 
   const client = new OAuth2Client({
     clientId: config.clientId,
@@ -252,6 +331,7 @@ const runInteractiveMode = async (): Promise<void> => {
   const server = createServer();
   const code = await waitForAuthorizationCode(server, {
     authUrl,
+    openBrowser: options.openBrowser,
     port,
     redirect,
     redirectUri: config.redirectUri,
@@ -305,7 +385,7 @@ const main = async (): Promise<void> => {
     await runCheckMode();
     return;
   }
-  await runInteractiveMode();
+  await runInteractiveMode({ openBrowser: !args.has("--no-open") });
 };
 
 try {

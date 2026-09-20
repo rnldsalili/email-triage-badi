@@ -3,6 +3,7 @@
   "name": "email-triage-badi",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-22",
+  "account_id": "35ade4713beefb2c7f971921950b34c2",
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "ai": {
     "binding": "AI",
@@ -12,19 +13,25 @@
     {
       "binding": "DB",
       "database_name": "email-triage-badi",
-      "database_id": "63090214-8de4-4177-a807-700938ee3099",
+      "database_id": "cb2dc462-5101-477e-8649-0b1e5451483b",
       "migrations_dir": "migrations",
     },
   ],
   "triggers": {
     "crons": ["*/5 * * * *"],
   },
+  "routes": [
+    {
+      "pattern": "email-triage.tellbadi.com",
+      "custom_domain": true,
+    },
+  ],
   "vars": {
     "AI_MODEL": "typesafe/jev",
     "AI_GATEWAY_ID": "email-triage-badi-dev",
     "GMAIL_ACCOUNT_EMAIL": "ronaldsalili1@gmail.com",
     "OWNER_ALIASES_JSON": "[]",
-    "OWNER_TIME_ZONE": "UTC",
+    "OWNER_TIME_ZONE": "Asia/Manila",
     "EMPLOYER_DOMAINS_JSON": "[]",
     "DEFAULT_MODE": "dry_run",
     "INITIAL_LOOKBACK_DAYS": "7",
@@ -37,5 +44,49 @@
     "MAX_AI_CALLS_PER_DAY": "500",
     "MAX_BODY_CHARACTERS": "12000",
     "DETAIL_RETENTION_DAYS": "90",
+  },
+  "env": {
+    "production": {
+      "name": "email-triage-badi",
+      "ai": {
+        "binding": "AI",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "email-triage-badi",
+          "database_id": "cb2dc462-5101-477e-8649-0b1e5451483b",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "triggers": {
+        "crons": ["*/5 * * * *"],
+      },
+      "routes": [
+        {
+          "pattern": "email-triage.tellbadi.com",
+          "custom_domain": true,
+        },
+      ],
+      "vars": {
+        "AI_MODEL": "typesafe/jev",
+        "AI_GATEWAY_ID": "email-triage-badi-dev",
+        "GMAIL_ACCOUNT_EMAIL": "ronaldsalili1@gmail.com",
+        "OWNER_ALIASES_JSON": "[]",
+        "OWNER_TIME_ZONE": "Asia/Manila",
+        "EMPLOYER_DOMAINS_JSON": "[]",
+        "DEFAULT_MODE": "dry_run",
+        "INITIAL_LOOKBACK_DAYS": "7",
+        "MAX_JOBS_PER_TICK": "20",
+        "TICK_WALL_BUDGET_MS": "120000",
+        "CHECKPOINT_RESERVE_MS": "15000",
+        "RUN_LEASE_MS": "180000",
+        "MAX_BACKFILL_MESSAGES": "5000",
+        "CLEANUP_BATCH_SIZE": "100",
+        "MAX_AI_CALLS_PER_DAY": "500",
+        "MAX_BODY_CHARACTERS": "12000",
+        "DETAIL_RETENTION_DAYS": "90",
+      },
+    },
   },
 }

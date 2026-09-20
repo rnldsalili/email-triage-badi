@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1789851860155,
-      "tag": "0000_illegal_callisto",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1789855697998,
-      "tag": "0001_pink_lifeguard",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1789857167552,
-      "tag": "0002_backfill_last_generation",
+      "when": 1789911235514,
+      "tag": "0000_initial",
       "breakpoints": true
     }
   ]

@@ -45,6 +45,7 @@ Jev is listed by Cloudflare as a **third-party** model available through the nat
 
 | Document | Purpose |
 | --- | --- |
+| [Deployment guide](docs/DEPLOY.md) | Step-by-step setup and deploy instructions |
 | [Project plan](docs/PLAN.md) | Scope, decisions, defaults, milestones, and release criteria |
 | [Labels and classification](docs/LABELS.md) | Approved labels, migration, Jev questions, and uncertainty policy |
 | [Architecture](docs/ARCHITECTURE.md) | Gmail sync, processing, persistence, retries, and module boundaries |
