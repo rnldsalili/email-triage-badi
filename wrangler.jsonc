@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "email-triage-badi",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "ai": {
+    "binding": "AI",
+    "remote": true,
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "email-triage-badi",
+      "database_id": "63090214-8de4-4177-a807-700938ee3099",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
+  "vars": {
+    "AI_MODEL": "typesafe/jev",
+    "AI_GATEWAY_ID": "email-triage-badi-dev",
+    "GMAIL_ACCOUNT_EMAIL": "ronaldsalili1@gmail.com",
+    "OWNER_ALIASES_JSON": "[]",
+    "OWNER_TIME_ZONE": "UTC",
+    "EMPLOYER_DOMAINS_JSON": "[]",
+    "DEFAULT_MODE": "dry_run",
+    "INITIAL_LOOKBACK_DAYS": "7",
+    "MAX_JOBS_PER_TICK": "20",
+    "TICK_WALL_BUDGET_MS": "120000",
+    "CHECKPOINT_RESERVE_MS": "15000",
+    "RUN_LEASE_MS": "180000",
+    "MAX_BACKFILL_MESSAGES": "5000",
+    "CLEANUP_BATCH_SIZE": "100",
+    "MAX_AI_CALLS_PER_DAY": "500",
+    "MAX_BODY_CHARACTERS": "12000",
+    "DETAIL_RETENTION_DAYS": "90",
+  },
+}

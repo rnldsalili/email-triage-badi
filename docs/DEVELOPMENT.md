@@ -8,24 +8,37 @@ Cloudflare Workers remains the application runtime. Keep `Bun.*` APIs in local s
 
 Verify Wrangler, Drizzle Kit, Vitest and Google's OAuth library with the selected versions during setup. Bun can launch package scripts whose executables use Node.js internally; retain a supported Node.js LTS installation where those tools require it. Do not force Node-targeted tools onto Bun's runtime without checking compatibility. Runtime-specific tests execute inside Cloudflare's Workers test environment.
 
-Planned scripts; these do not exist yet:
+Implemented scripts; D1 integration tests are included in `test`:
 
 | Script | Contract |
 | --- | --- |
 | `bun run dev` | Local Wrangler development |
 | `bun run types` | Generate Cloudflare binding/runtime types |
-| `bun run typecheck` | TypeScript no-emit checking |
-| `bun run lint` | Lint source and scripts |
-| `bun run format:check` | Formatting verification |
-| `bun run test` | Vitest deterministic tests with mocked external APIs |
-| `bun run test:integration` | Vitest Worker runtime and local D1 integration tests |
+| `bun run typecheck` | TypeScript no-emit checking (worker/tests and scripts projects) |
+| `bun run lint` | Oxlint over `src`, `tests`, `scripts` |
+| `bun run format` / `format:check` | Oxfmt formatting write/verify |
+| `bun run check` / `fix` | Ultracite check/fix over the whole repository (Oxlint + Oxfmt) |
+| `bun run test` | Vitest in the Workers runtime with local D1 and generated migrations |
+| `bun run test:watch` | Vitest watch mode |
+| `bun run test:live` | Explicit live tests (real AI binding, remote inference; excluded from routine runs) |
+| `bun run evaluate` | Live evaluation over the synthetic dataset with an explicit call cap |
 | `bun run build` | Wrangler deploy dry-run / bundle validation |
 | `bun run db:generate` | Generate SQL migrations and metadata from the Drizzle schema |
 | `bun run db:migrate:local` | Apply committed migrations to local D1 with Wrangler |
-| `bun run db:migrate:remote` | Apply committed migrations to an explicitly selected remote D1 environment with Wrangler |
+| `bun run db:migrate:remote` | Apply committed migrations to the configured remote D1 |
 | `bun run oauth:bootstrap` | Local interactive Google OAuth setup using a Bun TypeScript helper |
-| `bun run evaluate` | Explicit live-model evaluation using a Bun TypeScript helper |
-| `bun run deploy` | Deploy configured environment |
+| `bun run oauth:check` | Verify the stored refresh token and Gmail profile |
+| `bun run labels:inventory` | Read-only Gmail label inventory and migration plan (no writes) |
+| `bun run deploy` | Deploy the configured Worker |
+
+Notes from Phase 1 setup:
+
+- Vitest is pinned to 4.1.x because `@cloudflare/vitest-pool-workers` 0.22 requires Vitest `^4.1.0`; the pool's new `cloudflareTest()` plugin replaces the older `defineWorkersConfig()` helper.
+- The Workers compatibility date is `2026-08-22`, the newest date supported by the locally bundled workerd used by the test pool. Raise it when the local runtime supports a newer date.
+- Tests run against local D1 with the committed Drizzle-generated migrations applied via `applyD1Migrations` in `tests/setup.ts`. Storage is isolated per test file, not per test, so tests use unique account and message identifiers.
+- Test bindings (including the admin token) are injected through `vitest.config.ts`; local development secrets live in the gitignored `.dev.vars`.
+- `wrangler types` reads `.dev.vars`, so the committed `worker-configuration.d.ts` includes local secret names. Regenerate it after changing bindings or `.dev.vars`.
+- Linting and formatting use Ultracite's Oxlint/Oxfmt presets (`oxlint.config.ts`, `oxfmt.config.ts`); the Oxfmt line width stays at 90 to match the existing code. `bun run check` runs both tools repo-wide, while `lint`/`format` scope to `src`, `tests` and `scripts`. Sequential I/O loops use `for await...of` or explicit recursion rather than `for`/`while` so `no-await-in-loop` stays satisfied without parallelising rate-limited Gmail and D1 work. Tests keep at most five direct assertions per `it`, grouping related expectations into a single structural matcher.
 
 Local D1 and fake Gmail/AI adapters should be the default for development. A live AI binding request may use remote inference and incur charges even when initiated from local development; make the evaluation path explicit.
 
@@ -137,3 +150,32 @@ Tune on the development split. Re-run the untouched evaluation split before chan
 After code exists, CI should install the pinned Bun version and the Node.js version required by its tools, run `bun install --frozen-lockfile`, then use the `bun run` scripts for generated-type consistency, formatting, linting, type checking, deterministic tests, local D1 integration tests and bundle validation. Include a schema/migration consistency check using the pinned Drizzle Kit version: regeneration should not reveal an uncommitted schema change. Deployment uses a scoped Cloudflare credential in CI secrets only after a deployment workflow is intentionally configured.
 
 Model evaluation remains a separate explicit task because it costs money and has nondeterministic outputs. Keep runtime correctness tests deterministic through saved provider fixtures.
+
+## 6. Completeness-review hardening
+
+`.github/workflows/ci.yml` installs the pinned Bun version and Node.js 22, verifies generated binding types, formatting, lint, type checking, Workers/D1 tests, schema/migration consistency and the dry-run bundle. It has no deployment step. Routine tests disable remote bindings and inject test credentials; no Cloudflare or Gmail account is required.
+
+`tests/hardening.test.ts` exercises mode changes between reads and writes, mode-eligible job admission, conservative stage budgets, cursor lease fencing, page-token replay, expired catch-up recovery, vanished messages, write-ahead migration recovery, concurrent/failed idempotent writes, saved-stage retry, in-flight corrections, retention and streaming input limits.
+
+### Private evaluation and release gates
+
+Use the fixture ground-truth format, with top-level `version`, `split` (`synthetic`, `development`, or `held_out`) and `examples`. Optional per-example `threadId` and `templateGroup` identify related examples. Keep private data under gitignored `eval/private/` or outside the repository.
+
+```sh
+# Pipeline smoke check only; synthetic data does not certify release quality.
+EVAL_MAX_CALLS=30 bun run evaluate
+
+# Tune on the development split.
+EVAL_DATASET=eval/private/development.json EVAL_MAX_CALLS=300 bun run evaluate
+
+# Enforce quality and sample-count gates on an untouched held-out split.
+EVAL_DATASET=eval/private/held-out.json \
+EVAL_DEVELOPMENT_DATASET=eval/private/development.json \
+EVAL_MAX_CALLS=300 EVAL_ENFORCE=1 bun run evaluate
+```
+
+`EVAL_MAX_CALLS` must be supplied explicitly. Calls are sequential with no implicit retries. Attempts are counted even when the provider fails; unknown token usage is reported separately, so estimated cost is only the cost of known usage. `AI_GATEWAY_ID` optionally selects the evaluation gateway. The runner rejects overlapping IDs, thread/template groups and exact subject/body duplicates between development and held-out splits when enforcing gates.
+
+Reports include dataset hash, timestamp, returned model versions and application versions; confusion matrix; per-topic precision, recall, F1, accepted accuracy and coverage; macro F1; end-to-end correct-decision rate; per-dimension annotation/abstention counts; calibration bins; action metrics; latency, usage and ID-only mistake lists. Review mistakes to decide rubric changes; the runner does not invent annotations or tune on the held-out split.
+
+Enforcement requires the plan's topic/action thresholds and marks sparse categories unverified. Initial sample floors are 10 eligible examples for every topic including `other`, and 20 actual and predicted positives for each action. These are practical minimums, not statistical confidence guarantees. Null precision and zero coverage cannot pass. Enabling these gates does not mean the mailbox has passed them.

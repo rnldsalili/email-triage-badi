@@ -1,8 +1,16 @@
 # Email Triage Badi
 
-A personal Gmail triage service planned for Cloudflare Workers. It classifies incoming email with Jev through Cloudflare's AI binding and applies a topic label plus relevant action labels in Gmail.
+A personal Gmail triage service for Cloudflare Workers. It classifies incoming email with Jev through Cloudflare's AI binding and applies a topic label plus relevant action labels in Gmail.
 
-**Project status:** planning only. These documents specify the intended implementation; application code, commands, and infrastructure described below have not been created or deployed.
+**Project status:** core pipeline and operational API implemented. The repository includes hardening for mode changes, lease fencing, migration recovery, atomic owner operations, bounded inputs, retention, evaluation reports and CI. The previously deployed Worker runs in dry-run mode with a five-minute cron; these repository updates require deployment. Phase 7 remains open: representative owner-labeled evaluation, the observation dry-run, operational drills and the controlled apply-mode trial.
+
+Live verification performed 2026-09-20:
+
+- Real Jev inference through the AI binding and the dedicated `email-triage-badi-dev` AI Gateway (Unified Billing, logging disabled).
+- Gmail OAuth bootstrap with PKCE, live profile read and refresh-token exchange.
+- Read-only label inventory against the real mailbox (21 labels, six legacy mappings detected).
+- 15-example synthetic evaluation with zero failures (topic 14/14 accepted on unambiguous examples; median latency 819 ms; total estimated cost $0.0008).
+- Production Worker deployed with remote D1 migrations applied; `/healthz` and authenticated `/api/v1/status` verified.
 
 ## Product goal
 
@@ -15,21 +23,21 @@ Make the existing Gmail inbox easier to scan by answering four questions for eac
 
 Gmail remains the interface for reading email. The service provides a small authenticated API for setup, status, classification history, corrections, and retry operations.
 
-## Planned stack
+## Stack
 
 | Component | Choice |
 | --- | --- |
 | Runtime | Cloudflare Workers |
 | HTTP framework | Hono |
 | Language | TypeScript with strict checking |
-| Validation | Zod 4 and `@hono/zod-validator` |
+| Validation | Zod 4 with a small Hono JSON-body validation helper |
 | Classification | `env.AI.run("typesafe/jev", { state, questions })` |
 | Gmail integration | Gmail REST API with OAuth 2.0 offline access |
 | Scheduling | Cloudflare Cron Triggers, initially every five minutes |
 | Persistence | Cloudflare D1 with Drizzle ORM (`drizzle-orm/d1`) |
 | Database migrations | Drizzle Kit generates SQL; Wrangler applies migrations |
 | Tests | Vitest with Cloudflare's Workers test integration |
-| Tooling | Bun package manager/script runner, Wrangler, TypeScript, formatter/linter |
+| Tooling | Bun package manager/script runner, Wrangler, TypeScript, Ultracite with Oxlint/Oxfmt |
 
 Jev is listed by Cloudflare as a **third-party** model available through the native AI binding. Provision an AI Gateway with Unified Billing as the provisional access path; Phase 0 must resolve the discrepancy between the plain-call model example and the gateway requirement in the binding reference. Verify account access, billing units and rates in the Cloudflare dashboard.
 
@@ -40,7 +48,7 @@ Jev is listed by Cloudflare as a **third-party** model available through the nat
 | [Project plan](docs/PLAN.md) | Scope, decisions, defaults, milestones, and release criteria |
 | [Labels and classification](docs/LABELS.md) | Approved labels, migration, Jev questions, and uncertainty policy |
 | [Architecture](docs/ARCHITECTURE.md) | Gmail sync, processing, persistence, retries, and module boundaries |
-| [API design](docs/API.md) | Planned Hono endpoints and request/response contracts |
+| [API design](docs/API.md) | Implemented Hono endpoints and request/response contracts |
 | [Implementation plan](docs/IMPLEMENTATION.md) | Ordered work packages with dependencies and acceptance criteria |
 | [Development and evaluation](docs/DEVELOPMENT.md) | Tooling, test scenarios, fixtures, and classification evaluation |
 | [Deployment and operations](docs/OPERATIONS.md) | Credentials, configuration, rollout, monitoring, and recovery |
@@ -58,8 +66,27 @@ Jev is listed by Cloudflare as a **third-party** model available through the nat
 
 The approved taxonomy contains **12 topic labels and 3 action labels**. See [Labels](docs/LABELS.md) for exact names and boundaries.
 
-## Starting implementation
+## Local setup and verification
 
-Follow [Implementation plan](docs/IMPLEMENTATION.md) in order. Begin with the Cloudflare Jev integration spike and Gmail credentials, then build normalization and classification before automated labeling.
+Install the Bun version in `.bun-version` and Node.js 22, then run:
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test
+bun run build
+```
+
+Routine tests use local D1 and fake providers with remote bindings disabled. For local development, copy `.dev.vars.example` to `.dev.vars`, configure the owner in `wrangler.jsonc`, supply credentials, and run `bun run db:migrate:local` followed by `bun run dev`. See [OPERATIONS.md](docs/OPERATIONS.md) for OAuth and deployment setup.
+
+Live evaluation is explicit and billed separately from the production daily cap:
+
+```sh
+EVAL_MAX_CALLS=30 bun run evaluate
+```
+
+For private development/held-out datasets and enforced acceptance gates, see [DEVELOPMENT.md](docs/DEVELOPMENT.md). Passing runtime tests is not evidence that mailbox classification quality meets the release targets.
 
 Default assumptions are explicit in [Project plan](docs/PLAN.md). They can be adjusted without changing the overall architecture.

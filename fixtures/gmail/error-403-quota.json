@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Quota exceeded",
+    "errors": [
+      {
+        "domain": "usageLimits",
+        "reason": "quotaExceeded",
+        "message": "Quota exceeded"
+      }
+    ]
+  }
+}

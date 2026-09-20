@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Check generated binding types
+        run: |
+          cp .dev.vars.example .dev.vars
+          bun run types
+          git diff --exit-code -- worker-configuration.d.ts
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - name: Check schema and generated migrations
+        run: |
+          bun run db:generate
+          test -z "$(git status --porcelain -- migrations)"
+      - run: bun run build

@@ -1,6 +1,6 @@
 # Project plan
 
-Status: proposed implementation plan. Research date: 2026-09-20.
+Status: core implementation with repository hardening; release validation in progress. Research date: 2026-09-20.
 
 ## 1. Outcome
 
@@ -107,7 +107,13 @@ The first release organizes messages with labels. Future work includes automatic
 | M4: Owner controls | History, corrections, retries, pause, status | Corrections persist and survive later automatic processing |
 | M5: Release | Evaluated and monitored deployment | End-to-end criteria below satisfied |
 
+M0 (Integration proof) completed 2026-09-20: live Jev inference validated and the configured owner's Gmail profile was read. Evidence is recorded in RESEARCH.md section 0.
+
+M1–M4 completed 2026-09-20: foundation, read-only pipeline, ownership-aware labeling and owner controls are implemented and covered by 149 Workers-runtime tests. M5 (Release) is in progress: the production Worker and D1 are deployed in dry-run mode with a five-minute cron, and the remaining steps (observation dry-run, owner-labeled evaluation, label migration in apply mode and the controlled apply trial) are owner-gated. Two independent review rounds were completed; their findings were fixed and covered by regression tests.
+
 Detailed tasks and dependencies are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+
+Subsequent completeness review identified additional runtime and tooling gaps. Repository fixes add current-mode admission, lease-fenced cursor updates, stage deadlines, mode-eligible job selection, write-ahead migration journals, atomic idempotency, durable-stage retry, bounded payloads, complete evaluation diagnostics and CI. These changes require deployment; held-out quality, live recovery drills and the controlled apply trial are still unverified release gates.
 
 ## 7. Release criteria
 

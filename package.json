@@ -1,0 +1,50 @@
+{
+  "name": "email-triage-badi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "lint": "oxlint src tests scripts",
+    "format": "oxfmt src tests scripts",
+    "format:check": "oxfmt --check src tests scripts",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "evaluate": "vitest run --config vitest.live.config.ts tests/live/evaluate.test.ts",
+    "build": "wrangler deploy --dry-run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply email-triage-badi --local",
+    "db:migrate:remote": "wrangler d1 migrations apply email-triage-badi --remote",
+    "oauth:bootstrap": "bun run scripts/oauth-bootstrap.ts",
+    "oauth:check": "bun run scripts/oauth-bootstrap.ts --check",
+    "labels:inventory": "bun run scripts/label-inventory.ts",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.8",
+    "htmlparser2": "^12.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@types/bun": "^1.4.2",
+    "drizzle-kit": "^0.31.10",
+    "google-auth-library": "^11.1.0",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "typescript": "^7.0.2",
+    "ultracite": "^7.12.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.135.0"
+  },
+  "engines": {
+    "bun": ">=1.4.3"
+  },
+  "packageManager": "bun@1.4.3"
+}

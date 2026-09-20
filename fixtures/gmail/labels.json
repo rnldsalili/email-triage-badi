@@ -1,0 +1,16 @@
+{
+  "labels": [
+    { "id": "INBOX", "name": "INBOX", "type": "system" },
+    { "id": "SENT", "name": "SENT", "type": "system" },
+    { "id": "SPAM", "name": "SPAM", "type": "system" },
+    { "id": "Label_1", "name": "Credit Card", "type": "user" },
+    { "id": "Label_2", "name": "Github", "type": "user" },
+    { "id": "Label_3", "name": "Job Alerts", "type": "user" },
+    { "id": "Label_4", "name": "Payslips", "type": "user" },
+    { "id": "Label_5", "name": "SOS Need Urgent Attention", "type": "user" },
+    { "id": "Label_6", "name": "Transaction Receipt and Confirmation", "type": "user" },
+    { "id": "Label_7", "name": "Finance/Receipts & Confirmations", "type": "user" },
+    { "id": "Label_8", "name": "Finance", "type": "user" },
+    { "id": "Label_9", "name": "Travel", "type": "user" }
+  ]
+}

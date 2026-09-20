@@ -12,6 +12,20 @@ This runbook describes the intended application. Provisioning and exact CLI comm
 - Google OAuth client with registered localhost bootstrap callback and the owner allowed to authorize it.
 - The Gmail address used for mailbox identity verification.
 
+### Verified Phase 0 setup notes (2026-09-20)
+
+- Jev access requires **AI Gateway Unified Billing credits**. Without them, both the plain binding call and an explicit-gateway call fail with runtime error `2021: Insufficient AI Gateway credits`. Load credits in the dashboard under **AI > AI Gateway > Credits Available > Manage > Top-up credits**. A 5% fee applies to credit purchases; provider token pricing is passed through without markup.
+- A dedicated gateway `email-triage-badi-dev` is provisioned with `collect_logs: false`, `cache_ttl: 0`, authentication on and **Workers AI billing `unified`**, and the `default` gateway was also hardened to `collect_logs: false`. The application must pass this gateway ID explicitly on every Jev call: calls without a gateway argument silently route through `default` instead.
+- Observed billing from gateway-reported cost: exactly proportional to input tokens at about `4.2e-8` per token (~$0.042 per million input tokens); no separable output-token cost. Confirm the published rate in the dashboard before quoting costs.
+- The binding wraps the model output: `{ state: "Completed", result: { model, answers, usage }, gatewayMetadata: { keySource: "Unified" } }`. Parse and validate `result` against the published Jev output schema; tolerate unknown envelope fields.
+- Structured log entries retained metadata only (tokens, cost, status, timing); request and response content fields were empty in all observed cases, including while `default` had log collection enabled. Treat this as observed integration behavior, not a provider retention guarantee.
+- Cloudflare documents Zero Data Retention only for OpenAI and Anthropic Unified Billing traffic. No ZDR option is documented for TypeSafe/Jev; treat provider-side retention as unverified and check TypeSafe's terms before sending real email content.
+- Generated binding types do not include `typesafe/jev`; the call resolves to the unknown-model fallback returning `Record<string, unknown>`. Keep one localized Jev adapter plus Zod validation instead of `any` casts.
+- The local OAuth bootstrap helper is `scripts/oauth-bootstrap.ts`, run as `bun run oauth:bootstrap` (interactive) or `bun run oauth:check` (verify an existing refresh token). It registers `http://localhost:8788/oauth2callback` by default, validates a random `state` and PKCE `S256` verifier, requests `gmail.modify` with offline access, verifies the Gmail profile, and writes the refresh token to `.dev.vars` with mode `0600`. Override the redirect with `OAUTH_REDIRECT_URI` and pin the mailbox with `GMAIL_ACCOUNT_EMAIL`.
+- Phase 0 verified the helper end to end: live profile read for the configured owner mailbox and a successful fresh refresh-token exchange on `bun run oauth:check`.
+
+The Phase 0 integration spike and its temporary Workers were removed after verification; the synthetic request/response fixtures live in `fixtures/jev/`. Account-scoped credentials for local commands live in the gitignored `.cloudflare.env` (see `.cloudflare.env.example`).
+
 Workers AI model identifier is exactly `typesafe/jev`, without an `@cf/` prefix. Keep the native `AI` binding; an explicit gateway uses the third argument to `AI.run`, with `gateway.id` from `AI_GATEWAY_ID`. Confirm the billing unit (tokens, requests, or other), actual rate and account requirements rather than deriving cost from token usage alone.
 
 ## 2. Bindings and configuration
@@ -70,8 +84,7 @@ Google documents a seven-day refresh-token lifetime for External apps in Testing
 2. Provision D1. Review committed Drizzle Kit-generated SQL migrations, verify them locally, then apply those same files with Wrangler to the intended environment. Keep Wrangler's `migrations_dir` aligned with Drizzle Kit's output. Schema changes run before dependent application code is deployed, using backward-compatible changes where needed.
 3. Configure AI/D1 bindings, variables, secrets and production cron in Wrangler.
 4. Deploy with default dry-run mode.
-5. Verify health, authenticated status, Gmail owner identity and a synthetic Jev call.
-   Verify explicit gateway access, billing units and disabled content logging/cache behavior as part of this check.
+5. Verify health, authenticated status, Gmail owner identity and a synthetic Jev call. Verify explicit gateway access, billing units and disabled content logging/cache behavior as part of this check.
 6. Run read-only label inventory and review collision output.
 7. Bootstrap the recent inbox and inspect dry-run results.
 8. Evaluate using DEVELOPMENT.md; adjust versioned criteria and thresholds as needed.
@@ -149,3 +162,15 @@ Estimate monthly inference from measured input/output usage, call counts and the
 ## 8. Post-launch review
 
 After the first week, review latency, categories with frequent corrections, false urgent labels, body truncation frequency and actual cost. Adjust batch size or schedule based on measured backlog. Revisit Queues or push notifications only if the current design misses the owner's latency/volume needs.
+
+## 9. Hardened runtime behavior
+
+- Mode is re-read at provider-stage admission and before Gmail mutation. Queued migrations remain waiting in dry-run; paused mode stops new work. An already-dispatched request may finish.
+- The runner renews its mailbox lease between admitted stages. Cursor/page checkpoints include the owner token and expiry in their SQL conditions. Discovery receives a bounded portion of the tick so processing can progress during large scans.
+- Gmail/OAuth requests use 10-second abort signals. Gmail responses are streamed into a 4 MiB limit, OAuth/API JSON into 64 KiB limits. MIME traversal is bounded to 200 parts and depth 30. The complete serialized Jev request has a conservative 30,000 UTF-8-byte cap (including questions), reserving space within the documented 32k-token context; rejected inputs expose `model_input_too_large` rather than retrying inference.
+- Label migration journals are committed before the first Gmail write. Restarting reconciles the original step IDs and old/new names. Message mutations enforce approved IDs at the Gmail adapter boundary; stale intents are superseded and recomputed, never treated as satisfied by silently dropping their IDs.
+- Owner operations and idempotency responses commit atomically in D1. Replay keys live at least 90 days and remain while their operations exist. Legacy incomplete reservations return a conflict for inspection instead of blindly rerunning partially persisted work.
+- Detailed classifications, including the latest result, expire after the retention period unless needed by active jobs or pending intents. Message/job identity, ownership and correction locks remain. A correction can still reconcile its specified dimensions after classification details expire.
+- `status` reports complete 15-label readiness, last completion time and the last persisted redacted run error. Workers observability is enabled in Wrangler; use runtime telemetry for CPU duration rather than inferring CPU from wall time.
+
+The new repository code is not automatically deployed by CI. Complete local checks, deploy deliberately, then continue the dry-run observation and measured release gates before routine apply mode.

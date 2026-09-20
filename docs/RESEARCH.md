@@ -2,6 +2,56 @@
 
 Research date: 2026-09-20. Live documentation was consulted for the design. Service pricing, availability and schemas can change; verify them during the implementation spike.
 
+## 0. Phase 0 live verification findings (2026-09-20)
+
+Verified against the target Cloudflare account with a temporary spike Worker (removed after Phase 0; its synthetic requests are preserved in `fixtures/jev/`):
+
+**Access path and billing**
+
+- The scoped account API token can upload and deploy Workers with an AI binding. It cannot read account subscriptions or call the AI REST endpoint directly; deployed-Worker binding calls are the working verification path.
+- Before Unified Billing credits were loaded, both the plain binding call and the explicit-gateway call failed with runtime error `2021: Insufficient AI Gateway credits`. This resolves the earlier documentation discrepancy: **third-party models always route through AI Gateway and require prepaid credits**, even when no gateway argument is passed.
+- After loading credits, the synthetic four-question call succeeded and returned model `jev-1.13.0` with all four answers. The result is committed at `fixtures/jev/response.json`.
+- The gateway response is wrapped by the binding; the published model output schema applies to the inner object:
+
+  ```json
+  {
+    "state": "Completed",
+    "result": {
+      "model": "jev-1.13.0",
+      "answers": { "...": {} },
+      "usage": { "input_tokens": 891, "output_tokens": 172 }
+    },
+    "gatewayMetadata": { "keySource": "Unified" }
+  }
+  ```
+
+  A Zod adapter must parse this envelope (tolerating unknown envelope fields) and validate the published schema against `result`, not the top-level response.
+
+- Billing unit observed from gateway-reported `cost`: cost was exactly proportional to input tokens at `4.2e-8` per token (~$0.042 per million input tokens) on two calls with different sizes (891 in/172 out -> `3.7422e-5`; 311 in/21 out -> `1.3062e-5`). No separable output-token cost was observed at this precision. The account's dashboard pricing page remains the authoritative rate; confirm it before quoting costs.
+- Same-input warm latency was about 0.75–1.2 s; the first cold call took about 8.4 s. Latency for production input sizes must be measured on real messages before tuning tick budgets.
+- The explicit-gateway options (`gateway: { id, skipCache: true, collectLog: false }`) are accepted and typed, and `gatewayMetadata.keySource` reported `Unified`, confirming credits were used.
+
+**Gateway content handling and logging**
+
+- AI Gateway auto-creates a gateway named `default` (authentication on, log collection **on**, caching off, Workers AI billing `postpaid`) on the first authenticated request. Calls made without an explicit gateway argument routed there. The application must pass an explicit gateway ID on every Jev call.
+- A dedicated gateway `email-triage-badi-dev` was provisioned with `collect_logs: false`, `cache_ttl: 0`, authentication on and Workers AI billing `unified`. The `default` gateway was also hardened to `collect_logs: false`.
+- Logging behavior observed: calls with no per-request gateway options produced no log entry on the dedicated gateway; calls with explicit `collectLog: false` produced metadata-only entries. In all cases the request and response content fields were empty, including on the `default` gateway while its `collect_logs` was still on. Metadata (tokens, cost, status, timing) is retained regardless. This is recorded as observed behavior for this integration, not proof of provider-side zero retention.
+- Cloudflare documents Zero Data Retention for OpenAI and Anthropic Unified Billing traffic only. No ZDR option is documented for TypeSafe/Jev; provider-side retention must be checked with TypeSafe separately.
+
+**Binding types and runtime behavior**
+
+- Wrangler-generated types (Wrangler 4.135.0, compatibility date 2026-09-01): `typesafe/jev` is absent from the typed `AiModels` list. `Ai.run` resolves to the documented unknown-model fallback, `run<Model extends string>(model, inputs: Record<string, unknown>, options?): Promise<Record<string, unknown>>`. A localized Jev adapter plus Zod validation is required rather than `any` casts spread through the application. `AiOptions` includes a typed `gateway` object (`id`, `cacheKey`, `cacheTtl`, `skipCache`, `collectLog`, `eventId`, `requestTimeoutMs`, `retries`) and `signal?: AbortSignal`.
+- A strict TypeScript build of the spike passes with `typesafe/jev` and the typed gateway options; no cast was needed at the call site.
+- The AI binding itself works for standard Workers AI models: `@cf/meta/llama-3.1-8b-instruct-fast` returned 200 in about 1.8 s, so the `2021` error was specific to Unified Billing, not a broken binding.
+- Cancellation: `signal: AbortSignal.timeout(1)` aborted the awaited call after ~1 ms and rejected with `TimeoutError`. The Worker stops waiting on the promise; whether the upstream provider call is also cancelled is not observable from the runtime and remains a documented limitation.
+- Synthetic four-question requests aligned with the canonical taxonomy are committed at `fixtures/jev/request.json` and `fixtures/jev/response.json`.
+
+**Gmail authorization**
+
+- The local bootstrap helper completed a live authorization for the configured owner mailbox with `gmail.modify`, offline access, random `state` and PKCE `S256`. The Gmail profile read succeeded (roughly 220k messages and 57k threads on the account) and the refresh token was stored locally with mode `0600`.
+- A subsequent `bun run oauth:check` performed a fresh refresh-token exchange and profile read, confirming unattended refresh works with the stored credential.
+- Phase 0 acceptance is met: live Jev inference was validated and the Gmail owner profile read succeeded. The temporary spike Workers on both accounts were deleted after verification.
+
 ## 1. Verified findings
 
 ### Jev through Cloudflare

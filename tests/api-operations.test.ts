@@ -1,0 +1,624 @@
+import { env, exports } from "cloudflare:workers";
+import { eq } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+
+import { createDb } from "../src/db/client";
+import {
+  appControl,
+  classifications,
+  corrections,
+  idempotencyKeys,
+  jobs,
+  messages,
+  operations,
+} from "../src/db/schema";
+import { setMessageClientFactory } from "../src/routes/messages";
+import { resetDatabase } from "./helpers/db";
+import { fakeGmail, fullMessage } from "./helpers/gmail-fake";
+
+const BASE = "https://example.test";
+const TOKEN = "test-admin-token";
+const AUTH = { authorization: `Bearer ${TOKEN}` };
+const ACCOUNT = env.GMAIL_ACCOUNT_EMAIL;
+
+const api = (
+  path: string,
+  init: RequestInit & { json?: unknown } = {}
+): Promise<Response> => {
+  const headers = new Headers(init.headers);
+  if (!headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${TOKEN}`);
+  }
+  let { body } = init;
+  if (init.json !== undefined) {
+    headers.set("content-type", "application/json");
+    body = JSON.stringify(init.json);
+  }
+  return exports.default.fetch(`${BASE}${path}`, { ...init, body, headers });
+};
+
+const seedMessageWithClassification = async (
+  db: ReturnType<typeof createDb>,
+  options: {
+    gmailId?: string;
+    topic?: string;
+    needsReview?: boolean;
+    processingStatus?: string;
+  } = {}
+) => {
+  const gmailId = options.gmailId ?? "gm-api-1";
+  const messageId = crypto.randomUUID();
+  await db.insert(messages).values({
+    accountId: ACCOUNT,
+    applicationStatus: "not_applied_dry_run",
+    firstSeenAt: 1_700_000_000_000,
+    gmailMessageId: gmailId,
+    id: messageId,
+    lastGeneration: 1,
+    latestClassificationId: `classification-${messageId}`,
+    processingStatus: (options.processingStatus ?? "completed") as "completed",
+    receivedAt: 1_700_000_000_000,
+    threadId: "thread-api-1",
+  });
+  await db.insert(classifications).values({
+    accountId: ACCOUNT,
+    answerJson: JSON.stringify({
+      topic: {
+        choice: options.topic ?? "bills",
+        confidence: 0.9,
+        probabilities: {},
+        type: "choice",
+      },
+    }),
+    applicationStatus: "proposed",
+    createdAt: 1_700_000_000_000,
+    decisionJson: JSON.stringify({
+      needsReply: { probability: 0.05, status: "negative" },
+      needsReview: options.needsReview ?? false,
+      reviewReasons: options.needsReview ? ["to_do_uncertain"] : [],
+      toDo: { probability: 0.05, status: "negative" },
+      topic: {
+        confidence: 0.95,
+        key: options.topic ?? "bills",
+        probability: 0.95,
+        status: "accepted",
+        topKey: options.topic ?? "bills",
+      },
+      urgent: { probability: 0.05, status: "negative" },
+    }),
+    durationMs: 100,
+    id: `classification-${messageId}`,
+    messageId,
+    modelVersion: "jev-1.13.0",
+    normalizedInputHash: "hash",
+    policyVersion: "policy-v1",
+    reviewFlag: options.needsReview ?? false,
+    reviewReasonsJson: JSON.stringify(options.needsReview ? ["to_do_uncertain"] : []),
+    rubricVersion: "rubric-v1",
+    taxonomyVersion: "taxonomy-v1",
+    usageJson: "{}",
+  });
+  return { gmailId, messageId };
+};
+
+describe("operations API", () => {
+  it("replays idempotent backfill requests and rejects conflicting payloads", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const payload = {
+      maxMessages: 100,
+      receivedAfter: "2026-09-01T00:00:00Z",
+      receivedBefore: "2026-09-10T00:00:00Z",
+    };
+
+    const first = await api("/api/v1/backfills", {
+      headers: { "idempotency-key": "backfill-key-1" },
+      json: payload,
+      method: "POST",
+    });
+    const firstBody = await first.json<{ operationId: string }>();
+
+    const replay = await api("/api/v1/backfills", {
+      headers: { "idempotency-key": "backfill-key-1" },
+      json: payload,
+      method: "POST",
+    });
+    const replayBody = await replay.json<{ operationId: string }>();
+
+    const conflict = await api("/api/v1/backfills", {
+      headers: { "idempotency-key": "backfill-key-1" },
+      json: { ...payload, maxMessages: 200 },
+      method: "POST",
+    });
+    const conflictBody = await conflict.json<{ error: { code: string } }>();
+
+    expect({
+      conflictCode: conflictBody.error.code,
+      conflictStatus: conflict.status,
+      firstStatus: first.status,
+      replayOperationId: replayBody.operationId,
+      replayStatus: replay.status,
+    }).toStrictEqual({
+      conflictCode: "CONFLICT",
+      conflictStatus: 409,
+      firstStatus: 202,
+      replayOperationId: firstBody.operationId,
+      replayStatus: 202,
+    });
+    await expect(db.select().from(operations)).resolves.toHaveLength(1);
+  });
+
+  it("validates backfill ranges and caps", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const invalid = await api("/api/v1/backfills", {
+      headers: { "idempotency-key": "backfill-key-2" },
+      json: {
+        maxMessages: 10,
+        receivedAfter: "2026-09-10T00:00:00Z",
+        receivedBefore: "2026-09-01T00:00:00Z",
+      },
+      method: "POST",
+    });
+    expect(invalid.status).toBe(400);
+
+    const tooLarge = await api("/api/v1/backfills", {
+      headers: { "idempotency-key": "backfill-key-3" },
+      json: {
+        maxMessages: 100_000,
+        receivedAfter: "2026-09-01T00:00:00Z",
+        receivedBefore: "2026-09-10T00:00:00Z",
+      },
+      method: "POST",
+    });
+    expect(tooLarge.status).toBe(400);
+
+    const missingKey = await api("/api/v1/backfills", {
+      json: {
+        maxMessages: 10,
+        receivedAfter: "2026-09-01T00:00:00Z",
+        receivedBefore: "2026-09-10T00:00:00Z",
+      },
+      method: "POST",
+    });
+    expect(missingKey.status).toBe(400);
+  });
+
+  it("coalesces sync requests without an idempotency key", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const first = await api("/api/v1/sync", { method: "POST" });
+    expect(first.status).toBe(202);
+    const firstBody = await first.json<{ operationId: string; coalesced: boolean }>();
+    expect(firstBody.coalesced).toBeFalsy();
+
+    const second = await api("/api/v1/sync", { method: "POST" });
+    const secondBody = await second.json<{ operationId: string; coalesced: boolean }>();
+    expect(secondBody.operationId).toBe(firstBody.operationId);
+    expect(secondBody.coalesced).toBeTruthy();
+    await expect(db.select().from(operations)).resolves.toHaveLength(1);
+  });
+
+  it("returns 409 while an idempotent request is still being processed", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    await db.insert(idempotencyKeys).values({
+      accountId: ACCOUNT,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      id: crypto.randomUUID(),
+      key: "in-progress-key-1",
+      operationId: null,
+      requestHash: "unused-hash",
+      responseJson: null,
+      route: "sync",
+    });
+
+    const response = await api("/api/v1/sync", {
+      headers: { "idempotency-key": "in-progress-key-1" },
+      method: "POST",
+    });
+    expect(response.status).toBe(409);
+    await expect(db.select().from(operations)).resolves.toHaveLength(0);
+  });
+
+  it("exposes label definitions, mappings and migration readiness", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const response = await api("/api/v1/labels", { headers: AUTH });
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      definitions: unknown[];
+      legacyMappings: unknown[];
+      conflicts: string[];
+    }>();
+    expect(body.definitions).toHaveLength(15);
+    expect(body.legacyMappings).toHaveLength(6);
+    expect(body.conflicts).toStrictEqual([]);
+  });
+
+  it("requires apply mode for label migration", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    await db.update(appControl).set({ mode: "dry_run" });
+    const response = await api("/api/v1/labels/migrate", {
+      headers: { "idempotency-key": "migrate-key-1" },
+      method: "POST",
+    });
+    expect(response.status).toBe(409);
+
+    await db.update(appControl).set({ mode: "apply" });
+    const accepted = await api("/api/v1/labels/migrate", {
+      headers: { "idempotency-key": "migrate-key-1" },
+      method: "POST",
+    });
+    expect(accepted.status).toBe(202);
+  });
+
+  it("reports operation progress and 404s for unknown ids", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const created = await api("/api/v1/sync", { method: "POST" });
+    const { operationId } = await created.json<{ operationId: string }>();
+
+    const found = await api(`/api/v1/operations/${operationId}`, { headers: AUTH });
+    expect(found.status).toBe(200);
+    const body = await found.json<{ kind: string; status: string }>();
+    expect(body.kind).toBe("sync");
+    expect(body.status).toBe("queued");
+
+    const missing = await api("/api/v1/operations/does-not-exist", { headers: AUTH });
+    expect(missing.status).toBe(404);
+  });
+});
+
+describe("messages API", () => {
+  it("lists stored results with filters and cursor pagination", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    await seedMessageWithClassification(db, { gmailId: "gm-a", topic: "bills" });
+    await seedMessageWithClassification(db, {
+      gmailId: "gm-b",
+      needsReview: true,
+      topic: "work",
+    });
+
+    const all = await api("/api/v1/messages", { headers: AUTH });
+    const allBody = await all.json<{
+      items: { messageId: string }[];
+      nextCursor: string | null;
+    }>();
+    expect({
+      count: allBody.items.length,
+      nextCursor: allBody.nextCursor,
+    }).toStrictEqual({ count: 2, nextCursor: null });
+
+    const firstPage = await api("/api/v1/messages?limit=1", { headers: AUTH });
+    const firstPageBody = await firstPage.json<{
+      items: { messageId: string }[];
+      nextCursor: string | null;
+    }>();
+    expect({
+      count: firstPageBody.items.length,
+      hasCursor: Boolean(firstPageBody.nextCursor),
+    }).toStrictEqual({ count: 1, hasCursor: true });
+
+    const secondPage = await api(
+      `/api/v1/messages?limit=1&cursor=${encodeURIComponent(firstPageBody.nextCursor ?? "")}`,
+      { headers: AUTH }
+    );
+    const secondPageBody = await secondPage.json<{ items: { messageId: string }[] }>();
+    expect({
+      count: secondPageBody.items.length,
+      distinct: secondPageBody.items[0]?.messageId !== firstPageBody.items[0]?.messageId,
+    }).toStrictEqual({ count: 1, distinct: true });
+
+    const review = await api("/api/v1/messages?needsReview=true", { headers: AUTH });
+    const reviewBody = await review.json<{ items: { messageId: string }[] }>();
+
+    const topic = await api("/api/v1/messages?topic=work", { headers: AUTH });
+    const topicBody = await topic.json<{ items: { messageId: string }[] }>();
+    expect({
+      review: reviewBody.items.map((item) => item.messageId),
+      topicCount: topicBody.items.length,
+    }).toStrictEqual({ review: ["gm-b"], topicCount: 1 });
+
+    const invalid = await api("/api/v1/messages?limit=500", { headers: AUTH });
+    expect(invalid.status).toBe(400);
+  });
+
+  it("returns detail with ownership, corrections and resilient enrichment", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, { gmailId: "gm-detail" });
+
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: (id, format) =>
+            format === "metadata"
+              ? {
+                  ...fullMessage(id, ""),
+                  payload: {
+                    headers: [
+                      { name: "Subject", value: "Subject line" },
+                      { name: "From", value: "Sender <sender@example.test>" },
+                    ],
+                    mimeType: "text/plain",
+                  },
+                }
+              : fullMessage(id, "body"),
+        }).client
+    );
+
+    const enriched = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
+      headers: AUTH,
+    });
+    expect(enriched.status).toBe(200);
+    const body = await enriched.json<{
+      messageId: string;
+      gmailMetadata: { status: string; subject: string | null };
+      ownership: { appOwnedLabelIds: string[] };
+      corrections: unknown[];
+    }>();
+    expect(body).toMatchObject({
+      corrections: [],
+      gmailMetadata: { status: "available", subject: "Subject line" },
+      messageId: gmailId,
+    });
+
+    setMessageClientFactory(
+      () =>
+        fakeGmail({
+          getMessage: () => {
+            throw new Error("network down");
+          },
+        }).client
+    );
+    const failing = await api(`/api/v1/messages/${gmailId}?includeGmailMetadata=true`, {
+      headers: AUTH,
+    });
+    expect(failing.status).toBe(200);
+    const failingBody = await failing.json<{ gmailMetadata: { status: string } }>();
+
+    const notRequested = await api(`/api/v1/messages/${gmailId}`, { headers: AUTH });
+    const notRequestedBody = await notRequested.json<{
+      gmailMetadata: { status: string };
+    }>();
+
+    const missing = await api("/api/v1/messages/gm-missing", { headers: AUTH });
+
+    expect({
+      failingStatus: failingBody.gmailMetadata.status,
+      missingStatus: missing.status,
+      notRequestedStatus: notRequestedBody.gmailMetadata.status,
+    }).toStrictEqual({
+      failingStatus: "error",
+      missingStatus: 404,
+      notRequestedStatus: "not_requested",
+    });
+  });
+
+  it("persists corrections, locks dimensions and replays idempotently", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { messageId, gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-correct",
+    });
+
+    const first = await api(`/api/v1/messages/${gmailId}/corrections`, {
+      headers: { "idempotency-key": "correction-key-1" },
+      json: {
+        actions: { needs_reply: true },
+        note: "Recruiter conversation",
+        topic: "applications",
+      },
+      method: "POST",
+    });
+    const firstBody = await first.json<{
+      correctionId: string;
+      revision: number;
+      applicationStatus: string;
+    }>();
+
+    const replay = await api(`/api/v1/messages/${gmailId}/corrections`, {
+      headers: { "idempotency-key": "correction-key-1" },
+      json: {
+        actions: { needs_reply: true },
+        note: "Recruiter conversation",
+        topic: "applications",
+      },
+      method: "POST",
+    });
+    const replayBody = await replay.json<{ correctionId: string }>();
+    await expect(db.select().from(corrections)).resolves.toHaveLength(1);
+
+    const stored = await db.select().from(messages).where(eq(messages.id, messageId));
+    const locks: Record<string, { locked?: boolean }> = JSON.parse(
+      stored[0]?.dimensionLocksJson ?? "{}"
+    );
+
+    const second = await api(`/api/v1/messages/${gmailId}/corrections`, {
+      headers: { "idempotency-key": "correction-key-2" },
+      json: { actions: { to_do: false } },
+      method: "POST",
+    });
+    const secondBody = await second.json<{ revision: number }>();
+
+    const empty = await api(`/api/v1/messages/${gmailId}/corrections`, {
+      headers: { "idempotency-key": "correction-key-3" },
+      json: {},
+      method: "POST",
+    });
+
+    const jobRows = await db.select().from(jobs);
+
+    const detail = await api(`/api/v1/messages/${gmailId}`, { headers: AUTH });
+    const detailBody = await detail.json<{ topic: string | null }>();
+
+    expect({
+      firstRevision: firstBody.revision,
+      firstStatus: first.status,
+      locks,
+      replayCorrectionId: replayBody.correctionId,
+      replayStatus: replay.status,
+      secondRevision: secondBody.revision,
+      secondStatus: second.status,
+    }).toMatchObject({
+      firstRevision: 1,
+      firstStatus: 202,
+      locks: { needs_reply: { locked: true }, topic: { locked: true } },
+      replayCorrectionId: firstBody.correctionId,
+      replayStatus: 202,
+      secondRevision: 2,
+      secondStatus: 202,
+    });
+    expect(firstBody).toMatchObject({ applicationStatus: "pending_mode" });
+    expect(jobRows.filter((job) => job.kind === "correction")).toHaveLength(2);
+    expect({ emptyStatus: empty.status, topic: detailBody.topic }).toStrictEqual({
+      emptyStatus: 400,
+      topic: "applications",
+    });
+  });
+
+  it("enqueues reprocessing with a new generation and replays idempotently", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-reprocess",
+    });
+
+    const first = await api(`/api/v1/messages/${gmailId}/reprocess`, {
+      headers: { "idempotency-key": "reprocess-key-1" },
+      json: { reason: "rubric-v2" },
+      method: "POST",
+    });
+    expect(first.status).toBe(202);
+    const firstBody = await first.json<{ jobId: string; generation: number }>();
+    expect(firstBody.generation).toBe(2);
+
+    const replay = await api(`/api/v1/messages/${gmailId}/reprocess`, {
+      headers: { "idempotency-key": "reprocess-key-1" },
+      json: { reason: "rubric-v2" },
+      method: "POST",
+    });
+    const replayBody = await replay.json<{ jobId: string }>();
+    expect(replayBody.jobId).toBe(firstBody.jobId);
+
+    const second = await api(`/api/v1/messages/${gmailId}/reprocess`, {
+      headers: { "idempotency-key": "reprocess-key-2" },
+      json: {},
+      method: "POST",
+    });
+    const secondBody = await second.json<{ generation: number }>();
+    expect(secondBody.generation).toBe(3);
+  });
+
+  it("requires apply mode for saved-result application", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-apply-api",
+    });
+    await db.update(appControl).set({ mode: "dry_run" });
+
+    const rejected = await api(`/api/v1/messages/${gmailId}/apply`, {
+      headers: { "idempotency-key": "apply-key-1" },
+      json: { classificationId: "does-not-exist" },
+      method: "POST",
+    });
+    expect(rejected.status).toBe(409);
+
+    const stored = await db.select().from(classifications);
+    const classificationId = stored[0]?.id ?? "";
+    await db.update(appControl).set({ mode: "apply" });
+    const accepted = await api(`/api/v1/messages/${gmailId}/apply`, {
+      headers: { "idempotency-key": "apply-key-1" },
+      json: { classificationId },
+      method: "POST",
+    });
+    expect(accepted.status).toBe(202);
+
+    const wrong = await api(`/api/v1/messages/${gmailId}/apply`, {
+      headers: { "idempotency-key": "apply-key-2" },
+      json: { classificationId: "does-not-exist" },
+      method: "POST",
+    });
+    expect(wrong.status).toBe(404);
+  });
+
+  it("rejects applying a superseded classification", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { messageId, gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-superseded",
+    });
+    await db.update(appControl).set({ mode: "apply" });
+    const [original] = await db.select().from(classifications);
+    await db.insert(classifications).values({
+      accountId: ACCOUNT,
+      answerJson: "{}",
+      applicationStatus: "proposed",
+      createdAt: Date.now(),
+      decisionJson: original?.decisionJson ?? "{}",
+      durationMs: 10,
+      id: "classification-newer",
+      messageId,
+      modelVersion: "jev-1.13.0",
+      normalizedInputHash: "hash-2",
+      policyVersion: "policy-v1",
+      reviewFlag: false,
+      reviewReasonsJson: "[]",
+      rubricVersion: "rubric-v1",
+      taxonomyVersion: "taxonomy-v1",
+      usageJson: "{}",
+    });
+    await db
+      .update(messages)
+      .set({ latestClassificationId: "classification-newer" })
+      .where(eq(messages.id, messageId));
+
+    const response = await api(`/api/v1/messages/${gmailId}/apply`, {
+      headers: { "idempotency-key": "apply-superseded-1" },
+      json: { classificationId: original?.id ?? "" },
+      method: "POST",
+    });
+    expect(response.status).toBe(409);
+  });
+
+  it("resets failed jobs for retry and rejects non-retryable ones", async () => {
+    const db = createDb(env.DB);
+    await resetDatabase(db);
+    const { messageId, gmailId } = await seedMessageWithClassification(db, {
+      gmailId: "gm-retry",
+    });
+    await db.insert(jobs).values({
+      accountId: ACCOUNT,
+      attempts: 5,
+      createdAt: 1_700_000_000_000,
+      errorCode: "server_error",
+      errorMessage: "boom",
+      generation: 1,
+      id: "failed-job-1",
+      kind: "initial",
+      messageId,
+      stage: "failed",
+      updatedAt: 1_700_000_000_000,
+    });
+
+    const response = await api(`/api/v1/messages/${gmailId}/retry`, {
+      headers: { "idempotency-key": "retry-key-1" },
+      method: "POST",
+    });
+    expect(response.status).toBe(202);
+    const stored = await db.select().from(jobs).where(eq(jobs.id, "failed-job-1"));
+    expect(stored[0]?.stage).toBe("pending");
+    expect(stored[0]?.attempts).toBe(0);
+
+    const notRetryable = await api(`/api/v1/messages/${gmailId}/retry`, {
+      headers: { "idempotency-key": "retry-key-2" },
+      method: "POST",
+    });
+    expect(notRetryable.status).toBe(409);
+  });
+});

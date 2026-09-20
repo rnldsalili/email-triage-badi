@@ -1,0 +1,18 @@
+{
+  "history": [
+    {
+      "id": "900001",
+      "messagesAdded": [{ "message": { "id": "msg-2001", "threadId": "thread-601" } }]
+    },
+    {
+      "id": "900002",
+      "labelsAdded": [
+        {
+          "message": { "id": "msg-2002", "threadId": "thread-602" },
+          "labelIds": ["INBOX"]
+        }
+      ]
+    }
+  ],
+  "nextPageToken": "history-page-2"
+}

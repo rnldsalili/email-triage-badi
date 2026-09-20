@@ -1,0 +1,41 @@
+{
+  "id": "msg-1001",
+  "threadId": "thread-501",
+  "labelIds": ["INBOX", "UNREAD", "Label_8"],
+  "snippet": "Your monthly invoice INV-2291 is now available",
+  "internalDate": "1758186720000",
+  "historyId": "1000035",
+  "sizeEstimate": 4321,
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "Subject", "value": "Your invoice INV-2291 is now available" },
+      { "name": "From", "value": "Billing <billing@example-invoice.test>" },
+      { "name": "To", "value": "owner@example.test" },
+      { "name": "List-Id", "value": "invoices.example-invoice.test" }
+    ],
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [],
+        "body": {
+          "size": 210,
+          "data": "SGksIHlvdXIgbW9udGhseSBpbnZvaWNlIElOVi0yMjkxIGZvciAkMTkuOTkgaXMgbm93IGF2YWlsYWJsZS4="
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [],
+        "body": {
+          "size": 420,
+          "data": "PGh0bWw+PGJvZHk+PHA+WW91ciBpbnZvaWNlIElOVi0yMjkxIGlzIGF2YWlsYWJsZS48L3A+PC9ib2R5PjwvaHRtbD4="
+        }
+      }
+    ]
+  }
+}

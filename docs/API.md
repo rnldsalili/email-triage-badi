@@ -1,6 +1,6 @@
-# Planned HTTP API
+# HTTP API
 
-All routes below are planned, not implemented. Base path: `/api/v1`.
+The routes below are implemented. Base path: `/api/v1`.
 
 ## 1. Authentication and validation
 

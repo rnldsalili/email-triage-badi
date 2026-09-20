@@ -1,0 +1,185 @@
+{
+  "version": "eval-synthetic-v1",
+  "examples": [
+    {
+      "id": "invoice-due",
+      "subject": "Your invoice INV-2291 is now available",
+      "from": "Billing <billing@example-invoice.test>",
+      "body": "Your monthly invoice INV-2291 for $19.99 was generated on 2026-09-18. Payment will be collected automatically on 2026-09-25. No action is required if your card details are unchanged.",
+      "groundTruth": {
+        "topic": { "value": "bills", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": true, "ambiguous": false }
+      }
+    },
+    {
+      "id": "payment-receipt",
+      "subject": "Payment received - thank you",
+      "from": "Store <orders@example-store.test>",
+      "body": "We received your payment of $49.00 for order A-104. This receipt confirms your purchase. No further action is needed.",
+      "groundTruth": {
+        "topic": { "value": "receipts", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "card-statement",
+      "subject": "Your credit card statement is ready",
+      "from": "Card Services <statements@example-card.test>",
+      "body": "Your statement for September is ready. Total due: $412.30. Payment due date: 2026-10-05. Pay online through your account portal.",
+      "groundTruth": {
+        "topic": { "value": "credit_cards", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": true, "ambiguous": false }
+      }
+    },
+    {
+      "id": "newsletter-digest",
+      "subject": "This week in engineering: five reads",
+      "from": "Weekly Digest <digest@example-newsletter.test>",
+      "body": "Our editors picked five articles on distributed systems, testing and design. Read the full digest online. Unsubscribe at any time.",
+      "groundTruth": {
+        "topic": { "value": "newsletters", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "urgent-sale",
+      "subject": "URGENT: sale ends tonight!",
+      "from": "Deals <deals@example-shop.test>",
+      "body": "Hurry! Our biggest sale of the year ends tonight at midnight. Up to 70% off everything. Shop now before it is too late!",
+      "groundTruth": {
+        "topic": { "value": "promotions", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "recruiter-availability",
+      "subject": "Interview availability this week?",
+      "from": "Sam Recruiter <sam@example-recruiting.test>",
+      "body": "Hi, I am scheduling interviews for the backend role you applied to. Could you share two time slots that work this week? Looking forward to hearing from you.",
+      "groundTruth": {
+        "topic": { "value": "applications", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": true, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "job-alert-digest",
+      "subject": "12 new jobs matching your search",
+      "from": "Job Board <alerts@example-jobs.test>",
+      "body": "Here are this week's automated recommendations for backend engineer roles in your area. 12 new positions were posted. Update your preferences or unsubscribe.",
+      "groundTruth": {
+        "topic": { "value": "job_alerts", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "github-review-request",
+      "subject": "Review requested on PR #482: tighten retry logic",
+      "from": "GitHub <notifications@github.com>",
+      "body": "Your review was requested on pull request #482 in example/repo. The author asks for your feedback on the retry logic changes before merging.",
+      "groundTruth": {
+        "topic": { "value": "github", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": true, "ambiguous": false }
+      }
+    },
+    {
+      "id": "github-login-alert",
+      "subject": "New sign-in from an unrecognized device",
+      "from": "GitHub <security@github.com>",
+      "body": "We detected a sign-in to your account from a new device in an unusual location. If this was not you, secure your account immediately by resetting your password.",
+      "groundTruth": {
+        "topic": { "value": "security", "ambiguous": false },
+        "urgent": { "value": true, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": true, "ambiguous": false }
+      }
+    },
+    {
+      "id": "verification-code",
+      "subject": "Your verification code is 482913",
+      "from": "Accounts <no-reply@example-service.test>",
+      "body": "Use code 482913 to finish signing in. The code expires in 10 minutes. You requested this code, so no action is needed beyond entering it.",
+      "groundTruth": {
+        "topic": { "value": "security", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "friend-dinner",
+      "subject": "Dinner on Saturday?",
+      "from": "Alex <alex@example-friend.test>",
+      "body": "Hey! Are we still on for dinner Saturday at 7? Let me know by tomorrow so I can book a table.",
+      "groundTruth": {
+        "topic": { "value": "personal", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": true, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "payslip-ready",
+      "subject": "Your payslip for September is available",
+      "from": "Payroll <payroll@example-employer.test>",
+      "body": "Your payslip for September 2026 is now available in the payroll portal. Log in to view or download it.",
+      "groundTruth": {
+        "topic": { "value": "payslips", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "renewal-notice",
+      "subject": "Your subscription renews on October 1",
+      "from": "Subscriptions <billing@example-streaming.test>",
+      "body": "This is a reminder that your annual subscription will renew automatically on 2026-10-01 for $79.99. Your payment method on file will be charged unless you cancel before the renewal date.",
+      "groundTruth": {
+        "topic": { "value": "bills", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    },
+    {
+      "id": "quoted-project-thread",
+      "subject": "Re: Q4 launch checklist",
+      "from": "Dana <dana@example-client.test>",
+      "body": "Thanks for the update. Please send the revised timeline by Friday so we can lock the launch date.\n\nOn Tue, Sep 15 2026, Owner wrote:\n> Here is the checklist draft.\n> Let me know what you think.",
+      "groundTruth": {
+        "topic": { "value": "work", "ambiguous": false },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": true, "ambiguous": false },
+        "to_do": { "value": true, "ambiguous": false }
+      }
+    },
+    {
+      "id": "parcel-tracking",
+      "subject": "Your parcel is on the way",
+      "from": "Shipping <tracking@example-carrier.test>",
+      "body": "Your parcel left our sorting facility and is expected to arrive in 2-3 business days. Track it with the link in your account.",
+      "groundTruth": {
+        "topic": { "value": null, "ambiguous": true },
+        "urgent": { "value": false, "ambiguous": false },
+        "needs_reply": { "value": false, "ambiguous": false },
+        "to_do": { "value": false, "ambiguous": false }
+      }
+    }
+  ]
+}

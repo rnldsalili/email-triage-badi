@@ -53,37 +53,41 @@ Use urgent versus not-urgent for the first release; there are no additional low/
 Use one native binding call:
 
 ```ts
-const result = await env.AI.run("typesafe/jev", {
-  state: normalizedEmail,
-  questions: {
-    topic: {
-      type: "choice",
-      instructions: topicInstructions,
-      criteria: topicCriteria,
-    },
-    urgent: {
-      type: "noul",
-      instructions: urgencyInstructions,
-      criteria: { true: urgentCriteria, false: nonUrgentCriteria },
-    },
-    needs_reply: {
-      type: "noul",
-      instructions: replyInstructions,
-      criteria: { true: replyRequiredCriteria, false: noReplyCriteria },
-    },
-    to_do: {
-      type: "noul",
-      instructions: taskInstructions,
-      criteria: { true: taskRequiredCriteria, false: noTaskCriteria },
+const result = await env.AI.run(
+  "typesafe/jev",
+  {
+    state: normalizedEmail,
+    questions: {
+      topic: {
+        type: "choice",
+        instructions: topicInstructions,
+        criteria: topicCriteria,
+      },
+      urgent: {
+        type: "noul",
+        instructions: urgencyInstructions,
+        criteria: { true: urgentCriteria, false: nonUrgentCriteria },
+      },
+      needs_reply: {
+        type: "noul",
+        instructions: replyInstructions,
+        criteria: { true: replyRequiredCriteria, false: noReplyCriteria },
+      },
+      to_do: {
+        type: "noul",
+        instructions: taskInstructions,
+        criteria: { true: taskRequiredCriteria, false: noTaskCriteria },
+      },
     },
   },
-}, {
-  gateway: {
-    id: env.AI_GATEWAY_ID,
-    skipCache: true,
-    collectLog: false,
-  },
-});
+  {
+    gateway: {
+      id: env.AI_GATEWAY_ID,
+      skipCache: true,
+      collectLog: false,
+    },
+  }
+);
 ```
 
 This is illustrative TypeScript, not an implemented module. `topicCriteria` contains all 12 stable topic keys plus `other`; question text is versioned source-controlled configuration.
@@ -146,13 +150,13 @@ Failures and uncertain cases appear in the API review list. They do not add an u
 
 ## 7. Migration from existing labels
 
-| Old name | New name |
-| --- | --- |
-| `Credit Card` | `Finance/Credit Cards` |
-| `Github` | `Development/GitHub` |
-| `Job Alerts` | `Career/Job Alerts` |
-| `Payslips` | `Finance/Payslips` |
-| `SOS Need Urgent Attention` | `Action/Urgent` |
+| Old name                               | New name                           |
+| -------------------------------------- | ---------------------------------- |
+| `Credit Card`                          | `Finance/Credit Cards`             |
+| `Github`                               | `Development/GitHub`               |
+| `Job Alerts`                           | `Career/Job Alerts`                |
+| `Payslips`                             | `Finance/Payslips`                 |
+| `SOS Need Urgent Attention`            | `Action/Urgent`                    |
 | `Transaction Receipt and Confirmation` | `Finance/Receipts & Confirmations` |
 
 Migration is a separately invoked, resumable setup operation:

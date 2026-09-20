@@ -1,0 +1,8 @@
+{
+  "messages": [
+    { "id": "msg-1001", "threadId": "thread-501" },
+    { "id": "msg-1002", "threadId": "thread-502" }
+  ],
+  "nextPageToken": "page-2",
+  "resultSizeEstimate": 3
+}

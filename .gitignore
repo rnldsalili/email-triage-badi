@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.mf/
+coverage/
+dist/
+.dev.vars
+.env
+.env.*
+.cloudflare.env
+*.log
+eval/private/
