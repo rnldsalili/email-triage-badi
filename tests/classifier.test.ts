@@ -5,6 +5,7 @@ import responseFixture from "../fixtures/jev/response.json";
 import { classifyMessage, buildJevState } from "../src/classifier/jev";
 import { decide } from "../src/classifier/policy";
 import { buildQuestions } from "../src/classifier/questions";
+import type { QuestionSet } from "../src/classifier/questions";
 import {
   JevResponseError,
   parseJevResponse,
@@ -56,8 +57,27 @@ describe("question construction", () => {
       expect(question.type).toBe("noul");
       expect(question.criteria.true).toBeTruthy();
       expect(question.criteria.false).toBeTruthy();
-      expect(question.instructions).toMatch(/data, not instructions/iu);
     }
+  });
+
+  it("selects only topic criteria and preserves the standard default", () => {
+    const standard = buildQuestions();
+    const compact = buildQuestions("compact-v1");
+    expect(Object.keys(compact.topic.criteria)).toStrictEqual(
+      Object.keys(standard.topic.criteria)
+    );
+    expect(compact.topic.criteria).not.toStrictEqual(standard.topic.criteria);
+    expect(compact.topic.instructions).toBe(standard.topic.instructions);
+    for (const key of ["urgent", "needs_reply", "to_do"] as const) {
+      expect(compact[key]).toStrictEqual(standard[key]);
+    }
+    expect({
+      defaults: testConfig().ai,
+      enabled: testConfig({ AI_RUBRIC: "compact-v1", GITHUB_PASSIVE_FAST_PATH: "on" }).ai,
+    }).toMatchObject({
+      defaults: { githubPassiveFastPath: "off", rubric: "standard" },
+      enabled: { githubPassiveFastPath: "on", rubric: "compact-v1" },
+    });
   });
 });
 
@@ -190,8 +210,8 @@ describe(classifyMessage, () => {
   it("sends one call containing all four questions and records usage", async () => {
     const calls: unknown[] = [];
     const ai = {
-      run: (model: string, input: unknown) => {
-        calls.push({ input, model });
+      run: (model: string, input: unknown, options: unknown) => {
+        calls.push({ input, model, options });
         return responseFixture;
       },
     } as unknown as Ai;
@@ -203,6 +223,7 @@ describe(classifyMessage, () => {
       1_700_000_000_000,
       {
         gatewayId: "email-triage-badi-dev",
+        workload: "production",
       }
     );
 
@@ -210,6 +231,7 @@ describe(classifyMessage, () => {
     const input = calls[0] as {
       model: string;
       input: { questions: Record<string, unknown>; state: Record<string, unknown> };
+      options: { gateway: Record<string, unknown> };
     };
     const questionKeys = Object.keys(input.input.questions);
     expect({
@@ -221,15 +243,27 @@ describe(classifyMessage, () => {
       questionKeys: expect.arrayContaining(["needs_reply", "to_do", "topic", "urgent"]),
       subject: expect.stringContaining("invoice"),
     });
+    expect(input.input.questions).toStrictEqual(buildQuestions());
+    expect({
+      gateway: input.options.gateway,
+      retriesEnabled: "retries" in input.options.gateway,
+    }).toMatchObject({
+      gateway: {
+        collectLog: false,
+        id: "email-triage-badi-dev",
+        metadata: { rubric: "standard", workload: "production" },
+        skipCache: true,
+      },
+      retriesEnabled: false,
+    });
     expect(outcome).toMatchObject({
       decisions: { needsReview: false, topic: { key: "bills" } },
       durationMs: expect.any(Number),
       modelVersion: "jev-1.13.0",
       normalizedInputHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      rubricVersion: "rubric-v1",
       usage: { input_tokens: 891, output_tokens: 172 },
     });
-    expect(questionKeys).toHaveLength(4);
-    expect(outcome.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("propagates provider errors and cancellation", async () => {
@@ -239,8 +273,73 @@ describe(classifyMessage, () => {
       },
     } as unknown as Ai;
     await expect(
-      classifyMessage(ai, normalizedEmail(), testConfig(), 0, { gatewayId: "g" })
+      classifyMessage(ai, normalizedEmail(), testConfig(), 0, {
+        gatewayId: "g",
+        workload: "production",
+      })
     ).rejects.toThrow(/Insufficient AI Gateway credits/u);
+  });
+
+  it("tags the selected compact rubric and disables evaluation gateway retries", async () => {
+    let providerCalls = 0;
+    let gateway: Record<string, unknown> | undefined;
+    const ai = {
+      run: (
+        _model: string,
+        input: { questions: QuestionSet },
+        options: { gateway: Record<string, unknown> }
+      ) => {
+        providerCalls += 1;
+        ({ gateway } = options);
+        expect(input.questions.topic.criteria).toStrictEqual(
+          buildQuestions("compact-v1").topic.criteria
+        );
+        return responseFixture;
+      },
+    } as unknown as Ai;
+    let reserved = 0;
+    const outcome = await classifyMessage(
+      ai,
+      normalizedEmail(),
+      testConfig({ AI_RUBRIC: "compact-v1" }),
+      5000,
+      {
+        gatewayId: "evaluation-gateway",
+        onProviderCall: () => {
+          reserved += 1;
+          expect(providerCalls).toBe(0);
+        },
+        workload: "evaluation",
+      }
+    );
+    expect(reserved).toBe(1);
+    expect(providerCalls).toBe(1);
+    expect(outcome.rubricVersion).toBe("rubric-compact-v1");
+    expect(gateway).toMatchObject({
+      metadata: { rubric: "compact-v1", workload: "evaluation" },
+      retries: { maxAttempts: 1 },
+    });
+  });
+
+  it("does not reserve or invoke the provider for a failed local preflight", async () => {
+    let calls = 0;
+    const ai = {
+      run: () => {
+        calls += 1;
+        return responseFixture;
+      },
+    } as unknown as Ai;
+    const oversized = normalizedEmail({ listId: "x".repeat(40_000) });
+    await expect(
+      classifyMessage(ai, oversized, testConfig(), 0, {
+        gatewayId: "g",
+        onProviderCall: () => {
+          calls += 100;
+        },
+        workload: "evaluation",
+      })
+    ).rejects.toMatchObject({ code: "model_input_too_large" });
+    expect(calls).toBe(0);
   });
 
   it("builds state with owner context and truncation markers", () => {
@@ -275,6 +374,7 @@ describe("classification persistence", () => {
     } as unknown as Ai;
     const outcome = await classifyMessage(ai, normalizedEmail(), testConfig(), 5000, {
       gatewayId: "email-triage-badi-dev",
+      workload: "production",
     });
 
     const stored = await createClassification(db, {

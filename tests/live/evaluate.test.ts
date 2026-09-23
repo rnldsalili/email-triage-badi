@@ -45,6 +45,12 @@ describe("live evaluation", () => {
 
     const config = testConfig();
     const predictions: EvalPrediction[] = [];
+    const onProviderCall = () => {
+      if (attemptedCalls >= settings.maxCalls) {
+        throw new Error("evaluation_call_cap");
+      }
+      attemptedCalls += 1;
+    };
 
     for await (const example of examples) {
       const started = Date.now();
@@ -55,9 +61,10 @@ describe("live evaluation", () => {
         if (attemptedCalls >= settings.maxCalls) {
           throw new Error("evaluation_call_cap");
         }
-        attemptedCalls += 1;
         const outcome = await classifyMessage(env.AI, normalized, config, Date.now(), {
           gatewayId: settings.gatewayId,
+          onProviderCall,
+          workload: "evaluation",
         });
         predictions.push({
           decisions: outcome.decisions,

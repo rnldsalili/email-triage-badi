@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config/env";
-import { POLICY_VERSION, RUBRIC_VERSION, TAXONOMY_VERSION } from "../config/versions";
+import { POLICY_VERSION, rubricVersion, TAXONOMY_VERSION } from "../config/versions";
 import type { NormalizedEmail } from "../email/normalize";
 import { InputLimitError } from "../utils/bounded-body";
 import { sha256Hex } from "../utils/crypto";
@@ -68,7 +68,9 @@ export const buildJevState = (
 
 export interface ClassificationOutcome {
   modelVersion: string;
-  answers: ValidatedAnswers;
+  answers:
+    | ValidatedAnswers
+    | { type: "rule"; ruleId: "github-passive-v1"; event: "merged" | "closed" };
   decisions: DecisionSet;
   usage: { input_tokens: number; output_tokens: number };
   durationMs: number;
@@ -78,8 +80,14 @@ export interface ClassificationOutcome {
   policyVersion: string;
 }
 
+export interface JevClassificationOutcome extends ClassificationOutcome {
+  answers: ValidatedAnswers;
+}
+
 export interface ClassifyOptions {
   gatewayId: string;
+  workload: "production" | "evaluation";
+  onProviderCall?: () => void;
   timeoutMs?: number;
 }
 
@@ -91,9 +99,9 @@ export const classifyMessage = async (
   config: AppConfig,
   now: number,
   options: ClassifyOptions
-): Promise<ClassificationOutcome> => {
+): Promise<JevClassificationOutcome> => {
   const state = buildJevState(normalized, config, now);
-  const questions = buildQuestions();
+  const questions = buildQuestions(config.ai.rubric);
   // A UTF-8 byte per token is a deliberately conservative upper bound for
   // byte-fallback tokenizers. Reserve 2,000 of Jev's 32k context for framing/output.
   if (
@@ -102,20 +110,21 @@ export const classifyMessage = async (
     throw new InputLimitError("model_input_too_large");
   }
   const normalizedInputHash = await sha256Hex(JSON.stringify(state));
-
+  const requestOptions: AiOptions = {
+    gateway: {
+      collectLog: false,
+      id: options.gatewayId,
+      metadata: { rubric: config.ai.rubric, workload: options.workload },
+      ...(options.workload === "evaluation"
+        ? { retries: { maxAttempts: 1 as const } }
+        : {}),
+      skipCache: true,
+    },
+    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  };
   const started = Date.now();
-  const rawResponse = await ai.run(
-    config.ai.model,
-    { questions, state },
-    {
-      gateway: {
-        collectLog: false,
-        id: options.gatewayId,
-        skipCache: true,
-      },
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-    }
-  );
+  options.onProviderCall?.();
+  const rawResponse = await ai.run(config.ai.model, { questions, state }, requestOptions);
   const durationMs = Date.now() - started;
 
   const result: JevResult = parseJevResponse(rawResponse);
@@ -129,7 +138,7 @@ export const classifyMessage = async (
     modelVersion: result.model,
     normalizedInputHash,
     policyVersion: POLICY_VERSION,
-    rubricVersion: RUBRIC_VERSION,
+    rubricVersion: rubricVersion(config.ai.rubric),
     taxonomyVersion: TAXONOMY_VERSION,
     usage: result.usage,
   };

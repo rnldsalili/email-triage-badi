@@ -2,7 +2,7 @@
 
 A personal Gmail triage service for Cloudflare Workers. It classifies incoming email with Jev through Cloudflare's AI binding and applies a topic label plus relevant action labels in Gmail.
 
-**Project status:** core pipeline, operational API and owner dashboard implemented. The repository includes hardening for mode changes, lease fencing, migration recovery, atomic owner operations, bounded inputs, retention, evaluation reports and CI. The previously deployed Worker runs in dry-run mode with a five-minute cron; these repository updates require deployment. Phase 7 remains open: representative owner-labeled evaluation, the observation dry-run, operational drills and the controlled apply-mode trial.
+**Project status:** core pipeline, operational API and owner dashboard implemented. The repository includes hardening for mode changes, lease fencing, migration recovery, atomic owner operations, bounded inputs, retention, evaluation reports and CI. A five-minute cron is configured; the deployed mode is persistent state, not the `DEFAULT_MODE` in this file—check authenticated `/api/v1/status` before any operational action. Repository changes do not deploy automatically. Representative owner-labeled evaluation and operational drills remain separate release checks.
 
 Live verification performed 2026-09-20:
 
@@ -60,7 +60,7 @@ Jev is listed by Cloudflare as a **third-party** model available through the nat
 
 - Connect one Gmail account.
 - Discover new inbox messages using Gmail history.
-- Classify a message with one topic Choice and three independent action Noul questions in one Jev call.
+- Classify with one topic Choice and three independent action Noul questions in one Jev call; an optional, disabled-by-default exact GitHub completed-event rule can produce a zero-inference result instead.
 - Apply up to one automatic topic label and zero or more action labels.
 - Store bounded Subject/From metadata so messages are recognizable in the dashboard without a Gmail call per row.
 - Keep processing state, model results, and corrections in D1.
@@ -91,6 +91,6 @@ Live evaluation is explicit and billed separately from the production daily cap:
 EVAL_MAX_CALLS=30 bun run evaluate
 ```
 
-For private development/held-out datasets and enforced acceptance gates, see [DEVELOPMENT.md](docs/DEVELOPMENT.md). Passing runtime tests is not evidence that mailbox classification quality meets the release targets.
+The shorter topic rubric is selected for production with `AI_RUBRIC=compact-v1`; the separate `GITHUB_PASSIVE_FAST_PATH` remains `off`. For a private, unlabeled, bounded cost comparison, use `bun run sample:cost` followed by `bun run compare:cost` with `COST_DATASET`, `EVAL_MAX_CALLS`, and `COST_MAX_USD`; see [DEVELOPMENT.md](docs/DEVELOPMENT.md). Unlabeled agreement does not prove correctness. Owner-labeled held-out evaluation of the compact rubric is still outstanding.
 
 Default assumptions are explicit in [Project plan](docs/PLAN.md). They can be adjusted without changing the overall architecture.

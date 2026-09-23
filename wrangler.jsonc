@@ -35,6 +35,8 @@
   "vars": {
     "AI_MODEL": "typesafe/jev",
     "AI_GATEWAY_ID": "email-triage-badi-dev",
+    "AI_RUBRIC": "standard",
+    "GITHUB_PASSIVE_FAST_PATH": "off",
     "GMAIL_ACCOUNT_EMAIL": "ronaldsalili1@gmail.com",
     "OWNER_ALIASES_JSON": "[]",
     "OWNER_TIME_ZONE": "Asia/Manila",
@@ -84,6 +86,8 @@
       "vars": {
         "AI_MODEL": "typesafe/jev",
         "AI_GATEWAY_ID": "email-triage-badi-dev",
+        "AI_RUBRIC": "compact-v1",
+        "GITHUB_PASSIVE_FAST_PATH": "off",
         "GMAIL_ACCOUNT_EMAIL": "ronaldsalili1@gmail.com",
         "OWNER_ALIASES_JSON": "[]",
         "OWNER_TIME_ZONE": "Asia/Manila",

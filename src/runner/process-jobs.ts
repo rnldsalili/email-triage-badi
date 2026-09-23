@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 
+import { tryClassifyPassiveGithub } from "../classifier/github-passive";
 import { classifyMessage } from "../classifier/jev";
+import type { ClassificationOutcome } from "../classifier/jev";
 import { JevResponseError } from "../classifier/schemas";
 import type { AppConfig, Mode } from "../config/env";
 import type { Db } from "../db/client";
@@ -242,39 +244,42 @@ const classifyJob = async (
     maxBodyCharacters: deps.config.limits.maxBodyCharacters,
   });
   await admit(deps, STAGE_ESTIMATES_MS.classification);
-  const reservation = await reserveInferenceCall(
-    deps.db,
-    deps.accountId,
-    utcDateString(deps.now()),
-    deps.config.limits.maxAiCallsPerDay,
-    deps.now()
-  );
-  if (!reservation.reserved) {
-    await updateJobProgress(
+  let classification: ClassificationOutcome | null =
+    job.kind === "initial" && deps.config.ai.githubPassiveFastPath === "on"
+      ? await tryClassifyPassiveGithub(full, normalized, deps.config, deps.now())
+      : null;
+  if (!classification) {
+    const reservation = await reserveInferenceCall(
       deps.db,
-      job.id,
-      {
-        attempts: Math.max(0, job.attempts - 1),
-        clearLease: true,
-        deferredReason: "ai_budget",
-        nextAttemptAt: nextUtcMidnight(deps.now()),
-        now: deps.now(),
-        stage: "retry_wait",
-      },
-      ownerToken
+      deps.accountId,
+      utcDateString(deps.now()),
+      deps.config.limits.maxAiCallsPerDay,
+      deps.now()
     );
-    outcome.deferred += 1;
-    return;
-  }
+    if (!reservation.reserved) {
+      await updateJobProgress(
+        deps.db,
+        job.id,
+        {
+          attempts: Math.max(0, job.attempts - 1),
+          clearLease: true,
+          deferredReason: "ai_budget",
+          nextAttemptAt: nextUtcMidnight(deps.now()),
+          now: deps.now(),
+          stage: "retry_wait",
+        },
+        ownerToken
+      );
+      outcome.deferred += 1;
+      return;
+    }
 
-  await admit(deps, STAGE_ESTIMATES_MS.classification);
-  const classification = await classifyMessage(
-    deps.ai,
-    normalized,
-    deps.config,
-    deps.now(),
-    { gatewayId: deps.config.ai.gatewayId }
-  );
+    await admit(deps, STAGE_ESTIMATES_MS.classification);
+    classification = await classifyMessage(deps.ai, normalized, deps.config, deps.now(), {
+      gatewayId: deps.config.ai.gatewayId,
+      workload: "production",
+    });
+  }
 
   const stored = await createClassification(deps.db, {
     accountId: deps.accountId,

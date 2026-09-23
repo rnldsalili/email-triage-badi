@@ -4,7 +4,7 @@ import type { AppConfig } from "../config/env";
 import {
   BUILD_VERSION,
   POLICY_VERSION,
-  RUBRIC_VERSION,
+  rubricVersion,
   TAXONOMY_VERSION,
 } from "../config/versions";
 import type { Db } from "../db/client";
@@ -176,7 +176,7 @@ export const buildStatus = async (
       build: BUILD_VERSION,
       model: config.ai.model,
       policy: POLICY_VERSION,
-      rubric: RUBRIC_VERSION,
+      rubric: rubricVersion(config.ai.rubric),
       taxonomy: TAXONOMY_VERSION,
     },
   };

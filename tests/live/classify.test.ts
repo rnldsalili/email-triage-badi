@@ -15,6 +15,7 @@ describe("live Jev classification", () => {
     const started = Date.now();
     const outcome = await classifyMessage(env.AI, normalized, testConfig(), Date.now(), {
       gatewayId: "email-triage-badi-dev",
+      workload: "evaluation",
     });
 
     console.log(

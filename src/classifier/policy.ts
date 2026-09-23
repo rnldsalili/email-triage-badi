@@ -14,13 +14,13 @@ export interface TopicDecision {
   status: "accepted" | "uncertain";
   key: TopicKeyOrOther | null;
   topKey: TopicKeyOrOther;
-  probability: number;
-  confidence: number;
+  probability: number | null;
+  confidence: number | null;
 }
 
 export interface ActionDecision {
   status: "positive" | "negative" | "uncertain";
-  probability: number;
+  probability: number | null;
 }
 
 export interface DecisionSet {

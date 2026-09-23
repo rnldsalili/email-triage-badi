@@ -191,3 +191,15 @@ EVAL_MAX_CALLS=300 EVAL_ENFORCE=1 bun run evaluate
 Reports include dataset hash, timestamp, returned model versions and application versions; confusion matrix; per-topic precision, recall, F1, accepted accuracy and coverage; macro F1; end-to-end correct-decision rate; per-dimension annotation/abstention counts; calibration bins; action metrics; latency, usage and ID-only mistake lists. Review mistakes to decide rubric changes; the runner does not invent annotations or tune on the held-out split.
 
 Enforcement requires the plan's topic/action thresholds and marks sparse categories unverified. Initial sample floors are 10 eligible examples for every topic including `other`, and 20 actual and predicted positives for each action. These are practical minimums, not statistical confidence guarantees. Null precision and zero coverage cannot pass. Enabling these gates does not mean the mailbox has passed them.
+
+### Unlabeled mailbox cost comparison
+
+The optional cost experiment is separate from the labeled quality evaluation above. Its collector uses the configured Gmail credentials for GET-only access, verifies the mailbox identity, reads one page per GitHub/non-GitHub stratum and saves at most 80 full-message examples under gitignored `eval/private/` with owner-only permissions. It stops on rate limits or authentication errors without retries. Avoid collecting again if the dataset already exists; do not commit, email, log or publish its contents.
+
+```sh
+COST_DATASET=eval/private/mailbox-cost-observation.json bun run sample:cost
+env -u CLOUDFLARE_API_TOKEN COST_DATASET=eval/private/mailbox-cost-observation.json \
+  EVAL_MAX_CALLS=300 COST_MAX_USD=0.25 bun run compare:cost
+```
+
+Use `env -u CLOUDFLARE_API_TOKEN` only when a scoped API token cannot establish the remote Workers AI preview and an existing Wrangler OAuth login is authorized for this account. The live comparison makes two sequential Jev arms per example unless the guarded GitHub rule avoids the candidate call, with one 300-attempt/$0.25 estimated ceiling and no retries. The `compare:cost` script uses Vitest's verbose reporter so its metadata-only JSON report is visible; the default reporter hides Worker `console.log`. A second run spends credits again. The report separates rule-avoided and compact-prompt tokens, unknown provider usage and categorical disagreements using opaque example IDs, never message bodies. Gateway metadata tags workload/rubric only. Agreement with the original rubric is not ground truth, and a provider response lost after billing leaves total cost unknown to the test even when Gateway metadata estimates it. Production's explicit `AI_RUBRIC=compact-v1` is an owner-requested rollout before owner-labeled held-out validation; monitor corrections and keep `GITHUB_PASSIVE_FAST_PATH=off` until its own quality gate passes.

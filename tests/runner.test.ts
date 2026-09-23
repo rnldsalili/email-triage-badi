@@ -4,12 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import responseFixture from "../fixtures/jev/response.json";
 import { createDb } from "../src/db/client";
-import { createInitialJob } from "../src/db/repositories/jobs";
+import { createInitialJob, createGenerationJob } from "../src/db/repositories/jobs";
 import { acquireLease } from "../src/db/repositories/leases";
 import { getMailbox } from "../src/db/repositories/mailboxes";
 import { enqueueOperation } from "../src/db/repositories/operations";
 import {
   aiDailyUsage,
+  classifications,
+  labelMappings,
   appControl,
   jobs,
   leases,
@@ -32,6 +34,33 @@ import type { FakeGmail } from "./helpers/gmail-fake";
 
 const NOW = 1_700_000_000_000;
 const ACCOUNT = "owner@example.test";
+const passiveGithubMessage = (id: string, body = "Merged #123 into main.") => {
+  const text = `${body}\n\n-- \nReply to this email directly or view it on GitHub:\nhttps://github.com/acme/widget/pull/123#event-456\nYou are receiving this because your review was requested.\n\nMessage ID: <acme/widget/pull/123/issue_event/456@github.com>\n`;
+  return {
+    ...minimalMessage(id),
+    payload: {
+      body: { data: btoa(text) },
+      headers: [
+        { name: "From", value: "GitHub <notifications@github.com>" },
+        { name: "To", value: ACCOUNT },
+        { name: "Subject", value: "[acme/widget] Pull request #123 merged" },
+        { name: "List-Id", value: "acme/widget <widget.acme.github.com>" },
+        {
+          name: "Message-ID",
+          value: "<acme/widget/pull/123/issue_event/456@github.com>",
+        },
+        { name: "X-GitHub-Reason", value: "review_requested" },
+        { name: "X-GitHub-Recipient-Address", value: ACCOUNT },
+        {
+          name: "Authentication-Results",
+          value:
+            "mx.google.com; dkim=pass header.i=@github.com; dmarc=pass header.from=github.com",
+        },
+      ],
+      mimeType: "text/plain",
+    },
+  };
+};
 
 const deps = (
   db: ReturnType<typeof createDb>,
@@ -383,6 +412,172 @@ describe("job processing", () => {
       metadataState: "available",
       subject: "Subject for gm-1",
     });
+  });
+
+  it("persists a zero-inference completed GitHub event at an exhausted AI cap, then reprocesses with Jev", async () => {
+    const db = createDb(env.DB);
+    const messageId = await seedJob(db);
+    const gmail = fakeGmail({ getMessage: (id) => passiveGithubMessage(id) });
+    let aiCalls = 0;
+    const ai = {
+      run: () => {
+        aiCalls += 1;
+        return responseFixture;
+      },
+    } as unknown as Ai;
+
+    const first = await processDueJobs({
+      accountId: ACCOUNT,
+      ai,
+      budget: new TimeBudget(NOW, 120_000, 15_000),
+      client: gmail.client,
+      config: testConfig({ GITHUB_PASSIVE_FAST_PATH: "on", MAX_AI_CALLS_PER_DAY: "0" }),
+      db,
+      mode: "dry_run",
+      now: () => NOW,
+    });
+    const [rule] = await db.select().from(classifications);
+    const [messageRow] = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, messageId));
+    const firstReservations = await db.select().from(aiDailyUsage);
+    expect({
+      aiCalls,
+      dailyReservations: firstReservations.length,
+      decisions: JSON.parse(rule?.decisionJson ?? "{}"),
+      model: rule?.modelVersion,
+      processed: first.processed,
+      status: messageRow?.processingStatus,
+    }).toMatchObject({
+      aiCalls: 0,
+      dailyReservations: 0,
+      decisions: {
+        needsReply: { status: "negative" },
+        toDo: { status: "negative" },
+        topic: { key: "github", probability: null },
+        urgent: { probability: null, status: "negative" },
+      },
+      model: "rule:github-passive-v1",
+      processed: 1,
+      status: "completed",
+    });
+
+    await db
+      .update(messages)
+      .set({ lastGeneration: 2 })
+      .where(eq(messages.id, messageId));
+    await createGenerationJob(db, {
+      accountId: ACCOUNT,
+      generation: 2,
+      id: crypto.randomUUID(),
+      kind: "reprocess",
+      messageId,
+      now: NOW + 1000,
+    });
+    const second = await processDueJobs({
+      accountId: ACCOUNT,
+      ai,
+      budget: new TimeBudget(NOW + 1000, 120_000, 15_000),
+      client: gmail.client,
+      config: testConfig({ GITHUB_PASSIVE_FAST_PATH: "on", MAX_AI_CALLS_PER_DAY: "1" }),
+      db,
+      mode: "dry_run",
+      now: () => NOW + 1000,
+    });
+    const rows = await db.select().from(classifications);
+    const secondReservations = await db.select().from(aiDailyUsage);
+    expect({
+      aiCalls,
+      dailyReservations: secondReservations.length,
+      processed: second.processed,
+      versions: rows.map((row) => row.modelVersion).toSorted(),
+    }).toStrictEqual({
+      aiCalls: 1,
+      dailyReservations: 1,
+      processed: 1,
+      versions: ["jev-1.13.0", "rule:github-passive-v1"],
+    });
+  });
+
+  it("applies a rule topic through the existing ownership-aware label path", async () => {
+    const db = createDb(env.DB);
+    const messageId = await seedJob(db);
+    await db.update(appControl).set({ mode: "apply" });
+    await db.insert(labelMappings).values({
+      accountId: ACCOUNT,
+      currentName: "Triage/GitHub",
+      gmailLabelId: "Label_github",
+      id: crypto.randomUUID(),
+      legacyAliasIdsJson: "[]",
+      migrationState: "ready",
+      semanticKey: "github",
+      updatedAt: NOW,
+    });
+    let aiCalls = 0;
+    const gmail = fakeGmail({
+      getMessage: (id, format) =>
+        format === "minimal"
+          ? { ...minimalMessage(id), labelIds: ["INBOX", "Label_personal"] }
+          : { ...passiveGithubMessage(id), labelIds: ["INBOX", "Label_personal"] },
+      modifyMessage: (id, changes) => ({
+        id,
+        labelIds: ["INBOX", "Label_personal", ...(changes.addLabelIds ?? [])],
+        threadId: `thread-${id}`,
+      }),
+    });
+    const outcome = await processDueJobs({
+      accountId: ACCOUNT,
+      ai: {
+        run: () => {
+          aiCalls += 1;
+          return responseFixture;
+        },
+      } as unknown as Ai,
+      budget: new TimeBudget(NOW, 120_000, 15_000),
+      client: gmail.client,
+      config: testConfig({ GITHUB_PASSIVE_FAST_PATH: "on", MAX_AI_CALLS_PER_DAY: "0" }),
+      db,
+      mode: "apply",
+      now: () => NOW,
+    });
+    expect(outcome.processed).toBe(1);
+    expect(aiCalls).toBe(0);
+    const mutation = gmail.calls.find((call) => call.method === "modifyMessage");
+    expect(mutation?.args[1]).toStrictEqual({
+      addLabelIds: ["Label_github"],
+      removeLabelIds: [],
+    });
+    const [saved] = await db.select().from(messages).where(eq(messages.id, messageId));
+    expect(saved?.appOwnedLabelIdsJson).toContain("Label_github");
+  });
+
+  it("does not bypass the AI cap for a GitHub discussion requiring judgment", async () => {
+    const db = createDb(env.DB);
+    await seedJob(db);
+    const gmail = fakeGmail({
+      getMessage: (id) =>
+        passiveGithubMessage(id, "@reviewer commented on the PR: please respond today."),
+    });
+    let aiCalls = 0;
+    const outcome = await processDueJobs({
+      accountId: ACCOUNT,
+      ai: {
+        run: () => {
+          aiCalls += 1;
+          return responseFixture;
+        },
+      } as unknown as Ai,
+      budget: new TimeBudget(NOW, 120_000, 15_000),
+      client: gmail.client,
+      config: testConfig({ GITHUB_PASSIVE_FAST_PATH: "on", MAX_AI_CALLS_PER_DAY: "0" }),
+      db,
+      mode: "dry_run",
+      now: () => NOW,
+    });
+    expect(outcome.deferred).toBe(1);
+    expect(aiCalls).toBe(0);
+    await expect(db.select().from(classifications)).resolves.toHaveLength(0);
   });
 
   it("defers inference jobs at the daily cap without consuming retries", async () => {

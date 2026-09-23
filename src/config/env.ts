@@ -45,11 +45,13 @@ const rawEnvSchema = z
     ADMIN_API_TOKEN: z.string().min(1),
     AI_GATEWAY_ID: z.string().min(1),
     AI_MODEL: z.string().min(1).default("typesafe/jev"),
+    AI_RUBRIC: z.enum(["standard", "compact-v1"]).default("standard"),
     CHECKPOINT_RESERVE_MS: z.coerce.number().int().min(0).default(15_000),
     CLEANUP_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(100),
     DEFAULT_MODE: z.enum(MODES).default("dry_run"),
     DETAIL_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
     EMPLOYER_DOMAINS_JSON: jsonStringArray("[]"),
+    GITHUB_PASSIVE_FAST_PATH: z.enum(["off", "on"]).default("off"),
     GMAIL_ACCOUNT_EMAIL: z.email(),
     GOOGLE_CLIENT_ID: z.string().min(1),
     GOOGLE_CLIENT_SECRET: z.string().min(1),
@@ -84,8 +86,10 @@ const rawEnvSchema = z
 
 export interface AppConfig {
   ai: {
-    model: string;
     gatewayId: string;
+    githubPassiveFastPath: "off" | "on";
+    model: string;
+    rubric: "standard" | "compact-v1";
   };
   owner: {
     accountEmail: string;
@@ -142,7 +146,9 @@ export const parseConfig = (rawEnv: Record<string, unknown>): AppConfig => {
   return {
     ai: {
       gatewayId: env.AI_GATEWAY_ID,
+      githubPassiveFastPath: env.GITHUB_PASSIVE_FAST_PATH,
       model: env.AI_MODEL,
+      rubric: env.AI_RUBRIC,
     },
     defaults: {
       initialLookbackDays: env.INITIAL_LOOKBACK_DAYS,

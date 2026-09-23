@@ -44,6 +44,8 @@ Workers AI model identifier is exactly `typesafe/jev`, without an `@cf/` prefix.
 | `OWNER_TIME_ZONE` | Variable | IANA time zone; initial fallback UTC |
 | `EMPLOYER_DOMAINS_JSON` | Variable | Optional Work context, default `[]` |
 | `AI_MODEL` | Variable | `typesafe/jev` |
+| `AI_RUBRIC` | Variable | `standard` (local default) or `compact-v1`; production is explicitly set to `compact-v1`, with owner-labeled held-out quality still unverified |
+| `GITHUB_PASSIVE_FAST_PATH` | Variable | `off` (default) or `on` for exact authenticated-looking completed GitHub PR events only |
 | `DEFAULT_MODE` | Variable | `dry_run`; initializes persistent mode only on first setup |
 | `INITIAL_LOOKBACK_DAYS` | Variable | `7` |
 | `MAX_JOBS_PER_TICK` | Variable | Starting ceiling `20`; lower when measured stage costs require it |
@@ -59,9 +61,9 @@ Workers AI model identifier is exactly `typesafe/jev`, without an `@cf/` prefix.
 
 Validate variables once per invocation/service initialization using Zod. Thresholds, taxonomy and rubric live in versioned code/configuration rather than undocumented dashboard edits. The active mode lives in D1; a deployment must not reset it unexpectedly.
 
-Validate positive bounded configuration values, checkpoint reserve below the wall budget, and a run lease longer than the wall budget. `MAX_AI_CALLS_PER_DAY=0` intentionally defers all inference. Use conditional D1 reservations before calls; no dispatch is allowed when the budget cannot be reserved. The guard limits call volume, not money, and does not cover independent local evaluation.
+Validate positive bounded configuration values, checkpoint reserve below the wall budget, and a run lease longer than the wall budget. `MAX_AI_CALLS_PER_DAY=0` intentionally defers Jev inference. Use conditional D1 reservations before calls; no dispatch is allowed when the budget cannot be reserved. If the optional GitHub passive rule is enabled, a strict completed-event match produces a zero-token saved classification without a Jev reservation; any mismatch, forced reprocess, comment, approval, workflow or security notice stays on the guarded Jev path. The guard limits call volume, not money, and does not cover independent local evaluation.
 
-For email requests, set gateway `skipCache: true` and `collectLog: false`, and verify effective gateway logging/cache settings. Keep email bodies out of application logs and gateway content logs/caches. Document provider-side data handling separately rather than inferring zero retention from local application settings.
+For email requests, set gateway `skipCache: true` and `collectLog: false`, and verify effective gateway logging/cache settings. The Jev adapter tags only workload and rubric in Gateway metadata, never subject, body or Gmail ID. Keep email bodies out of application logs and gateway content logs/caches. Document provider-side data handling separately rather than inferring zero retention from local application settings.
 
 For a five-minute cron, Workers Paid currently allows 30 seconds CPU and 15 minutes wall time; Workers Free allows only 10 ms CPU. The application's 120-second wall budget leaves network waits separate from CPU use. Measure both via runtime telemetry and tune batch/input limits; raising an HTTP CPU setting is not a way to bypass the cron CPU limit.
 
@@ -199,7 +201,7 @@ Clean expired detail rows in bounded batches. Retain minimum deduplication recor
 
 Total cost consists of Worker executions/compute, D1 reads/writes/storage, and Jev inference at Cloudflare's account-specific published rate. Five-minute polling produces approximately 288 scheduled invocations per day before manual operations.
 
-Estimate monthly inference from measured input/output usage, call counts and the verified dashboard billing units. Do not substitute TypeSafe's direct API rate or assume returned token counters imply token billing. Bound backfills and report processed counts/tokens so one large historical scan is visible in the estimate. Include any applicable gateway charges. The daily call guard reduces accidental volume but cannot guarantee a dollar ceiling when request sizes or pricing vary.
+Estimate monthly inference from measured input/output usage, call counts and the verified dashboard billing units. Do not substitute TypeSafe's direct API rate or assume returned token counters imply token billing. When aggregating retained `classifications.usage_json`, count original `proposed`/`not_applied_dry_run` Jev rows, exclude `corrected` rows that may copy prior usage and count rule outcomes separately at zero tokens. Failed requests may have billed usage without a saved classification, and retained details expire; reconcile with Gateway metadata cost estimates (not invoices). Historical Gateway requests without workload metadata cannot be attributed to production versus evaluation. Bound backfills and report processed counts/tokens so one large historical scan is visible in the estimate. Include the Unified Billing credit-purchase fee where applicable. The daily call guard reduces accidental volume but cannot guarantee a dollar ceiling when request sizes or pricing vary.
 
 ## 8. Post-launch review
 

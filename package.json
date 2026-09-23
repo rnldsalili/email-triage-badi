@@ -18,6 +18,8 @@
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.live.config.ts",
     "evaluate": "vitest run --config vitest.live.config.ts tests/live/evaluate.test.ts",
+    "sample:cost": "bun run scripts/mailbox-cost-sample.ts",
+    "compare:cost": "vitest run --config vitest.live.config.ts tests/live/cost-compare.test.ts --reporter=verbose",
     "build": "bun run web:build && wrangler deploy --dry-run",
     "build:worker": "wrangler deploy --dry-run",
     "web:build": "vite build web --config web/vite.config.ts",

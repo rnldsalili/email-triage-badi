@@ -68,7 +68,7 @@ export const diagnostics = (examples: EvalExample[], predictions: EvalPrediction
         expected: truth,
       });
     }
-    if (decision) {
+    if (decision && decision.probability !== null) {
       const bin = bins[Math.min(9, Math.floor(decision.probability * 10))];
       if (bin) {
         bin.count += 1;
@@ -156,7 +156,7 @@ export const diagnostics = (examples: EvalExample[], predictions: EvalPrediction
           expected: truth.value,
         });
       }
-      if (!decision) {
+      if (!decision || decision.probability === null) {
         continue;
       }
       const bin = actionBins[Math.min(9, Math.floor(decision.probability * 10))];

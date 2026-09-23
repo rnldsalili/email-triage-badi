@@ -42,6 +42,32 @@ export const TOPIC_CRITERIA: Record<string, string> = {
   work: "Other employer, colleague, client and project correspondence. Specific financial, payroll, GitHub and recruiting topics take precedence.",
 };
 
+export const COMPACT_TOPIC_CRITERIA: Record<string, string> = {
+  applications:
+    "Applications, recruiters, interviews, offers or rejections; not bulk job alerts.",
+  bills:
+    "Unpaid service invoices, utility bills or future subscription renewals; not card statements or completed payments.",
+  credit_cards:
+    "Card statements, due notices, fees or servicing; receipts for completed payments, security for suspected fraud.",
+  github:
+    "Repository issues, PRs, reviews or workflows; security for account/login alerts, receipts for payments.",
+  job_alerts:
+    "Automated vacancy recommendations or job digests; not individual recruiting.",
+  newsletters:
+    "Editorial or educational subscribed updates; promotions for sales, job_alerts for vacancies.",
+  other:
+    "No listed topic fits; includes routine nontransactional, nonpersonal notifications.",
+  payslips: "Payslips/payroll documents; work for other HR mail.",
+  personal: "Direct non-work personal correspondence; not automated notices.",
+  promotions:
+    "Sales, discounts or marketing; incidental offers do not override transactional purpose.",
+  receipts:
+    "Completed purchases, payments, refunds or transaction records; bills for unpaid/future charges, applications for interviews.",
+  security:
+    "Login/account changes, password resets or verification codes. Expected codes alone imply neither urgency nor a task.",
+  work: "Other employer, colleague, client or project mail; financial, payroll, GitHub and recruiting topics take precedence.",
+};
+
 export const ACTION_INSTRUCTIONS: Record<
   ActionKey,
   { instructions: string; criteria: { true: string; false: string } }
@@ -73,12 +99,15 @@ export const ACTION_INSTRUCTIONS: Record<
   },
 };
 
-export const buildTopicQuestion = (): ChoiceQuestion => {
+export const buildTopicQuestion = (
+  rubric: "standard" | "compact-v1" = "standard"
+): ChoiceQuestion => {
+  const source = rubric === "compact-v1" ? COMPACT_TOPIC_CRITERIA : TOPIC_CRITERIA;
   const criteria: Record<string, string> = {};
   for (const key of TOPIC_KEYS) {
-    criteria[key] = TOPIC_CRITERIA[key] ?? "";
+    criteria[key] = source[key] ?? "";
   }
-  criteria.other = TOPIC_CRITERIA.other ?? "";
+  criteria.other = source.other ?? "";
   return {
     criteria,
     instructions:
@@ -103,10 +132,12 @@ export interface QuestionSet {
   to_do: NoulQuestion;
 }
 
-export const buildQuestions = (): QuestionSet => ({
+export const buildQuestions = (
+  rubric: "standard" | "compact-v1" = "standard"
+): QuestionSet => ({
   needs_reply: buildActionQuestion("needs_reply"),
   to_do: buildActionQuestion("to_do"),
-  topic: buildTopicQuestion(),
+  topic: buildTopicQuestion(rubric),
   urgent: buildActionQuestion("urgent"),
 });
 

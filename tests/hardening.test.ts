@@ -644,7 +644,10 @@ describe("implementation hardening", () => {
         },
       } as unknown as Ai;
       await expect(
-        classifyMessage(ai, normalized, testConfig(), NOW, { gatewayId: "test" })
+        classifyMessage(ai, normalized, testConfig(), NOW, {
+          gatewayId: "test",
+          workload: "production",
+        })
       ).rejects.toMatchObject({ code: "model_input_too_large" });
     });
 

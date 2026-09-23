@@ -118,6 +118,42 @@ describe("evaluation report", () => {
     ).toMatchObject({ eligible: 1, precision: 1, recall: 1 });
   });
 
+  it("counts categorical rule decisions without inventing calibration probabilities", () => {
+    const rule = decisions(
+      { key: "github", status: "accepted", topKey: "github" },
+      { needsReply: "negative", toDo: "negative", urgent: "negative" }
+    );
+    rule.topic.confidence = null;
+    rule.topic.probability = null;
+    rule.urgent.probability = null;
+    rule.needsReply.probability = null;
+    rule.toDo.probability = null;
+    const report = buildReport(
+      [example("passive-event", "github")],
+      [
+        {
+          decisions: rule,
+          durationMs: 0,
+          exampleId: "passive-event",
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      ],
+      OPTIONS
+    );
+    expect(report.topic).toMatchObject({ accepted: 1, accuracy: 1 });
+    expect(report.actions.map((action) => action.falsePositives)).toStrictEqual([
+      0, 0, 0,
+    ]);
+    expect(
+      report.diagnostics.topicCalibration.reduce((sum, bin) => sum + bin.count, 0)
+    ).toBe(0);
+    expect(
+      report.diagnostics.actionCalibration.every((item) =>
+        item.bins.every((bin) => bin.count === 0)
+      )
+    ).toBeTruthy();
+  });
+
   it("rejects development/held-out leakage across thread groups", () => {
     const development = {
       examples: [{ ...example("dev", "work"), threadId: "same-thread" }],
