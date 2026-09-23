@@ -139,8 +139,8 @@ export const buildStatus = async (
     db.get<{ at: number | null }>(
       sql`SELECT MAX(updated_at) AS at FROM jobs WHERE stage = 'completed'`
     ),
-    db.get<{ code: string; at: number }>(
-      sql`SELECT failure_summary AS code, finished_at AS at FROM sync_runs WHERE error_count > 0 AND failure_summary IS NOT NULL ORDER BY started_at DESC LIMIT 1`
+    db.get<{ code: string | null; at: number; error_count: number }>(
+      sql`SELECT failure_summary AS code, finished_at AS at, error_count FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC, started_at DESC LIMIT 1`
     ),
   ]);
 
@@ -154,7 +154,10 @@ export const buildStatus = async (
     jobs: jobCounts,
     labels,
     lastCompletionAt: completion?.at ? new Date(completion.at).toISOString() : null,
-    lastError: error ? { at: new Date(error.at).toISOString(), code: error.code } : null,
+    lastError:
+      error && error.error_count > 0 && error.code !== null
+        ? { at: new Date(error.at).toISOString(), code: error.code }
+        : null,
     mailbox: mailbox
       ? {
           authStatus: mailbox.authStatus,

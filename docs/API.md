@@ -58,6 +58,8 @@ Use 400 for invalid input, 401 for missing/invalid authentication, 403 for rejec
 
 Use Gmail message IDs in message paths. Account scope always comes from server configuration, not an arbitrary client-supplied mailbox.
 
+`GET /api/v1/status` reports `lastError` only when the most recently completed sync failed. A successful sync clears the active warning; older failures remain in sync history. An in-progress sync does not change the warning until it finishes.
+
 Long work is stored before returning 202. The next scheduled tick processes it, and `POST /api/v1/run` may start that work immediately. Operation statuses are `queued`, `running`, `completed`, or `failed`; detailed job stages and deferral reasons are exposed separately where relevant. The MVP has no cancellation state or endpoint; pausing stops admission of new work without discarding queued operations.
 
 ### Manual tick

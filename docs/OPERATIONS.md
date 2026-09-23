@@ -45,7 +45,7 @@ Workers AI model identifier is exactly `typesafe/jev`, without an `@cf/` prefix.
 | `EMPLOYER_DOMAINS_JSON` | Variable | Optional Work context, default `[]` |
 | `AI_MODEL` | Variable | `typesafe/jev` |
 | `AI_RUBRIC` | Variable | `standard` (local default) or `compact-v1`; production is explicitly set to `compact-v1`, with owner-labeled held-out quality still unverified |
-| `GITHUB_PASSIVE_FAST_PATH` | Variable | `off` (default) or `on` for exact authenticated-looking completed GitHub PR events only |
+| `GITHUB_PASSIVE_FAST_PATH` | Variable | `off` (local default); production is `on` for exact authenticated-looking merged/closed GitHub PR notices only. Other GitHub mail uses Jev |
 | `DEFAULT_MODE` | Variable | `dry_run`; initializes persistent mode only on first setup |
 | `INITIAL_LOOKBACK_DAYS` | Variable | `7` |
 | `MAX_JOBS_PER_TICK` | Variable | Starting ceiling `20`; lower when measured stage costs require it |

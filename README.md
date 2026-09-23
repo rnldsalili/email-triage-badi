@@ -91,6 +91,6 @@ Live evaluation is explicit and billed separately from the production daily cap:
 EVAL_MAX_CALLS=30 bun run evaluate
 ```
 
-The shorter topic rubric is selected for production with `AI_RUBRIC=compact-v1`; the separate `GITHUB_PASSIVE_FAST_PATH` remains `off`. For a private, unlabeled, bounded cost comparison, use `bun run sample:cost` followed by `bun run compare:cost` with `COST_DATASET`, `EVAL_MAX_CALLS`, and `COST_MAX_USD`; see [DEVELOPMENT.md](docs/DEVELOPMENT.md). Unlabeled agreement does not prove correctness. Owner-labeled held-out evaluation of the compact rubric is still outstanding.
+The shorter topic rubric is selected for production with `AI_RUBRIC=compact-v1`; `GITHUB_PASSIVE_FAST_PATH=on` skips Jev only for exact-match merged or closed GitHub PR notices. Other GitHub mail still uses Jev. For a private, unlabeled, bounded cost comparison, use `bun run sample:cost` followed by `bun run compare:cost` with `COST_DATASET`, `EVAL_MAX_CALLS`, and `COST_MAX_USD`; see [DEVELOPMENT.md](docs/DEVELOPMENT.md). Unlabeled agreement does not prove correctness. Owner-labeled held-out evaluation of the compact rubric and GitHub fast lane is still outstanding.
 
 Default assumptions are explicit in [Project plan](docs/PLAN.md). They can be adjusted without changing the overall architecture.

@@ -18,6 +18,7 @@ import {
   messages,
   operations,
   mailboxes,
+  syncRuns,
 } from "../src/db/schema";
 import { normalizeMessage } from "../src/email/normalize";
 import { GmailClient } from "../src/gmail/client";
@@ -664,6 +665,51 @@ describe("implementation hardening", () => {
       await persistInventory(db, ACCOUNT, buildMigrationPlan(allLabels()), NOW);
       await expect(buildStatus(db, testConfig(), NOW)).resolves.toMatchObject({
         labels: { mapped: 15, migration: "ready" },
+      });
+    });
+
+    it("clears a sync warning after recovery and shows a later failure", async () => {
+      await db.insert(syncRuns).values({
+        accountId: ACCOUNT,
+        errorCount: 1,
+        failureSummary: "auth_invalid",
+        finishedAt: NOW + 10,
+        id: "failed-first",
+        phase: "incremental",
+        startedAt: NOW,
+      });
+      expect((await buildStatus(db, testConfig(), NOW + 10)).lastError).toEqual({
+        at: new Date(NOW + 10).toISOString(),
+        code: "auth_invalid",
+      });
+
+      await db.insert(syncRuns).values({
+        accountId: ACCOUNT,
+        finishedAt: NOW + 30,
+        id: "recovered",
+        phase: "incremental",
+        startedAt: NOW + 20,
+      });
+      expect((await buildStatus(db, testConfig(), NOW + 30)).lastError).toBeNull();
+
+      await db.insert(syncRuns).values({
+        accountId: ACCOUNT,
+        errorCount: 1,
+        failureSummary: "network_error",
+        finishedAt: NOW + 50,
+        id: "failed-later",
+        phase: "incremental",
+        startedAt: NOW + 40,
+      });
+      await db.insert(syncRuns).values({
+        accountId: ACCOUNT,
+        id: "running",
+        phase: "incremental",
+        startedAt: NOW + 60,
+      });
+      expect((await buildStatus(db, testConfig(), NOW + 60)).lastError).toEqual({
+        at: new Date(NOW + 50).toISOString(),
+        code: "network_error",
       });
     });
   });
